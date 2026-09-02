@@ -1,21 +1,67 @@
 # Architecture
 
-The application is one local process with two cooperating surfaces: a Streamlit UI and a
-private Starlette OCR route. LiteParse calls that route while reconstructing document layout;
-GPT-5.6 Terra supplies OCR and evidence-grounded extraction.
+The project is a local, single-process application. Streamlit presents the UI while a private
+Starlette route satisfies LiteParse's HTTP OCR interface. Both OCR and extraction use the same
+configured GPT-5.6 Terra client.
+
+## Component view
 
 ```mermaid
-flowchart LR
-  U[Streamlit upload] --> P[Pipeline]
-  P --> R[LiteParse repair module]
-  R --> O[Private OCR route]
-  O --> T[GPT-5.6 Terra]
-  R --> E[Extraction module]
-  E --> T
-  E --> A[Markdown + JSON artifact]
-  A --> U
+flowchart TB
+    Browser[Browser] --> UI[Streamlit UI]
+    UI --> Pipeline[Document pipeline]
+    Pipeline --> Repair[LiteParse repair module]
+    Repair --> LiteParse[LiteParse]
+    LiteParse -->|loopback POST /api/ocr| Bridge[OCR bridge]
+    Bridge --> Terra[GPT-5.6 Terra]
+    Repair --> Extract[Extraction module]
+    Extract --> Terra
+    Extract --> Artifact[Session artifact]
+    Artifact --> UI
 ```
 
-`server.py` composes the UI and route. `pipeline.py` validates files and builds artifacts.
-`repair.py` owns parsing and bounded 400-DPI repair. `extraction.py` owns schemas, evidence,
-chunking, retries, and hierarchical merge.
+## Boundaries
+
+### Presentation and hosting
+
+`server.py` creates one `st.App` from the packaged `ui.py` script and mounts the private OCR
+route. The console command `liteparse-ade` delegates to this server. The UI owns Streamlit
+session state but no parsing logic.
+
+### Coordination
+
+`pipeline.py` is the small public coordinator. It validates input, creates a temporary source
+file, invokes parsing and extraction, then builds the versioned JSON artifact. It also serializes
+individual JSON files and collision-safe ZIP archives.
+
+### Parsing and repair
+
+`repair.py` is the only module that configures LiteParse. It owns preflight page checks, the
+300-DPI pass, hard-region selection, 400-DPI repairs, the final parse, and line-evidence catalog.
+The OCR bridge owns run-scoped caches so LiteParse can reuse Terra output across these passes.
+
+### Extraction
+
+`extraction.py` owns the strict schema wrapper, evidence validation, bounded chunks, retry
+feedback, and hierarchical merge. It receives parsed Markdown and line evidence; it does not
+read source files directly.
+
+## State and trust boundaries
+
+- Browser uploads enter through Streamlit and are untrusted.
+- Temporary source files exist only inside a `TemporaryDirectory`.
+- OCR caches use random run IDs and accept only active loopback requests.
+- Terra receives page images for OCR and parsed content for extraction.
+- Model output is untrusted until Pydantic, JSON Schema, coordinate, and evidence checks pass.
+- Completed artifacts remain in Streamlit session state until cleared or the session ends.
+
+## Design constraints
+
+- One local process avoids exposing the OCR callback as a standalone service.
+- Fixed model and DPI settings keep results comparable between runs.
+- Markdown and extracted data remain separate artifacts so later-stage failure does not erase
+  successful parsing.
+- Prompts are packaged Markdown resources, making their content reviewable and hashable.
+
+See [processing flow](processing-flow.md) for the request sequence and
+[Python internals](../reference/python-internals.md) for callable-level reference.
