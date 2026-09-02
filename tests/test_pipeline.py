@@ -1,4 +1,4 @@
-"""Tests for validation, geometry, extraction, and exports."""
+"""Tests for validation, extraction invariants, orchestration, and exports."""
 
 from __future__ import annotations
 
@@ -6,41 +6,79 @@ import io
 import json
 import zipfile
 from types import SimpleNamespace
-from typing import Any, ClassVar
+from typing import Any
 
 import pytest
 from PIL import Image
 
+from liteparse_agentic_document_extraction.extraction import (
+    extract_document,
+    extraction_schema,
+    generic_data_schema,
+    validate_extraction,
+    validate_user_schema,
+)
 from liteparse_agentic_document_extraction.models import (
     DocumentArtifact,
+    ExtractionResult,
     LineEvidence,
+    ParsedDocument,
+    ParsedPage,
     ProcessingOptions,
     RunStatus,
 )
 from liteparse_agentic_document_extraction.pipeline import (
-    Region,
-    _catalog_prompt,
-    _hard_regions,
-    _line_catalog,
-    _resolve_pointer,
     artifact_json,
-    extract_data,
-    merge_regions,
-    padded_crop,
     parse_target_pages,
     process_document,
     result_zip,
     safe_stem,
     validate_upload,
-    validate_user_schema,
 )
+from liteparse_agentic_document_extraction.repair import Region, merge_regions, padded_crop
 
 
 def png_bytes(width: int = 100, height: int = 100) -> bytes:
-    """Create a valid in-memory PNG."""
     output = io.BytesIO()
     Image.new("RGB", (width, height), "white").save(output, format="PNG")
     return output.getvalue()
+
+
+def strict_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"invoice_number": {"type": ["string", "null"]}},
+        "required": ["invoice_number"],
+    }
+
+
+def parsed_document(page_count: int = 1) -> ParsedDocument:
+    lines = tuple(
+        LineEvidence(
+            f"p{page}-l0001",
+            page,
+            f"Invoice INV-{page}",
+            (1, 2, 30, 10),
+            "ocr_300",
+            0.9,
+        )
+        for page in range(1, page_count + 1)
+    )
+    pages = tuple(
+        ParsedPage(page, f"# Invoice\n\nINV-{page}", (f"p{page}-l0001",))
+        for page in range(1, page_count + 1)
+    )
+    return ParsedDocument(
+        markdown="\n\n".join(page.markdown for page in pages),
+        pages=pages,
+        lines=lines,
+        repairs=(),
+        issues=(),
+        source_page_count=page_count,
+        processed_pages=tuple(range(1, page_count + 1)),
+        prompt_template_hashes=("a" * 64,),
+    )
 
 
 @pytest.mark.parametrize(
@@ -61,6 +99,7 @@ def test_upload_validation_and_safe_name() -> None:
     assert validate_upload("scan.PNG", png_bytes()) == ".png"
     assert validate_upload("doc.pdf", b"%PDF-1.7\nbody") == ".pdf"
     assert safe_stem("../../Invoice 123?.pdf") == "Invoice_123"
+    assert safe_stem("CON.pdf") == "_CON"
     with pytest.raises(ValueError, match="Unsupported"):
         validate_upload("notes.txt", b"hello")
     with pytest.raises(ValueError, match="empty"):
@@ -71,16 +110,7 @@ def test_upload_validation_and_safe_name() -> None:
         validate_upload("scan.png", b"not png")
 
 
-def strict_schema() -> dict[str, Any]:
-    return {
-        "type": "object",
-        "additionalProperties": False,
-        "properties": {"invoice_number": {"type": ["string", "null"]}},
-        "required": ["invoice_number"],
-    }
-
-
-def test_schema_validation() -> None:
+def test_schema_validation_translates_errors() -> None:
     validate_user_schema(None)
     validate_user_schema(strict_schema())
     with pytest.raises(ValueError, match="root type"):
@@ -107,28 +137,66 @@ def test_schema_validation() -> None:
                 "required": ["x"],
             }
         )
+    with pytest.raises(ValueError, match="Invalid JSON Schema"):
+        validate_user_schema(
+            {"type": "object", "additionalProperties": False, "properties": {}, "required": 1}
+        )
 
 
 def test_region_merge_and_crop() -> None:
-    regions = [
-        Region(1, (10, 10, 30, 30), "tiny"),
-        Region(1, (31, 10, 50, 30), "blurred"),
-        Region(1, (80, 80, 90, 90), "mark"),
-    ]
-    merged = merge_regions(regions, 100, 100)
-    assert len(merged) == 2
-    assert merged[0].bbox == (10, 10, 50, 30)
+    merged = merge_regions(
+        [
+            Region(1, (10, 10, 30, 30), "tiny"),
+            Region(1, (31, 10, 50, 30), "blurred"),
+            Region(1, (80, 80, 90, 90), "mark"),
+        ],
+        100,
+        100,
+    )
+    assert [region.bbox for region in merged] == [(10, 10, 50, 30), (80, 80, 90, 90)]
     assert padded_crop((10, 20, 90, 80), 100, 100) == pytest.approx((0.18, 0.08, 0.18, 0.08))
 
-    many = [Region(1, (index * 20, 0, index * 20 + 5, 5), str(index)) for index in range(9)]
-    assert len(merge_regions(many, 1000, 100)) == 8
+
+def valid_result() -> dict[str, Any]:
+    return {
+        "status": "complete",
+        "data": {"invoice_number": "INV-1"},
+        "evidence": [{"path": "/data/invoice_number", "line_ids": ["p1-l0001"], "quote": "INV-1"}],
+        "issues": [],
+    }
 
 
-def test_pointer_resolution() -> None:
-    value = {"data": {"items": [{"name": "A/B"}]}}
-    assert _resolve_pointer(value, "/data/items/0/name") == "A/B"
-    with pytest.raises(KeyError):
-        _resolve_pointer(value, "data/items")
+def test_evidence_contract_rejects_false_grounding() -> None:
+    catalog = parsed_document().lines
+    errors, trusted = validate_extraction(valid_result(), strict_schema(), catalog)
+    assert errors == []
+    assert len(trusted) == 1
+
+    two_fields = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+        "required": ["a", "b"],
+    }
+    incomplete = {
+        "status": "complete",
+        "data": {"a": "INV-1", "b": "missing"},
+        "evidence": [{"path": "/data/a", "line_ids": ["p1-l0001"], "quote": "INV-1"}],
+        "issues": [],
+    }
+    assert any(
+        "/data/b" in error for error in validate_extraction(incomplete, two_fields, catalog)[0]
+    )
+
+    wrong = valid_result()
+    wrong["evidence"] = [{"path": "/status", "line_ids": ["p1-l0001"], "quote": ""}]
+    errors, trusted = validate_extraction(wrong, strict_schema(), catalog)
+    assert trusted == []
+    assert any("unknown data pointer" in error for error in errors)
+
+    contradictory = {"status": "complete", "data": None, "evidence": [], "issues": []}
+    assert validate_extraction(contradictory, strict_schema(), catalog)[0]
+    assert extraction_schema(generic_data_schema())["properties"]["evidence"]
 
 
 class FakeResponses:
@@ -141,233 +209,123 @@ class FakeResponses:
         return SimpleNamespace(output_text=json.dumps(self.outputs.pop(0)))
 
 
-def test_extraction_validates_and_retries(monkeypatch: pytest.MonkeyPatch) -> None:
-    invalid = {
-        "status": "complete",
-        "data": {"invoice_number": "INV-7"},
-        "evidence": [{"path": "/data/invoice_number", "line_ids": ["missing"], "quote": "INV-7"}],
-        "issues": [],
-    }
-    valid = {
-        "status": "complete",
-        "data": {"invoice_number": "INV-7"},
-        "evidence": [{"path": "/data/invoice_number", "line_ids": ["p1-l0001"], "quote": "INV-7"}],
-        "issues": [],
-    }
-    responses = FakeResponses([invalid, valid])
+def test_extraction_retries_bad_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    invalid = valid_result()
+    invalid["evidence"] = [
+        {"path": "/data/invoice_number", "line_ids": ["missing"], "quote": "INV-1"}
+    ]
+    responses = FakeResponses([invalid, valid_result()])
     monkeypatch.setattr(
-        "liteparse_agentic_document_extraction.pipeline.get_openai_client",
+        "liteparse_agentic_document_extraction.extraction.get_openai_client",
         lambda: SimpleNamespace(responses=responses),
     )
-    catalog = [LineEvidence("p1-l0001", 1, "Invoice INV-7", (1, 2, 3, 4), "ocr_300")]
-    result, prompt_hash = extract_data(
-        "Invoice INV-7", catalog, ProcessingOptions("Extract invoice number", strict_schema())
+    result = extract_document(
+        parsed_document(), ProcessingOptions("Extract invoice number", strict_schema())
     )
-    assert result["status"] == "complete"
+    assert result.status == "complete"
     assert len(responses.calls) == 2
-    assert len(prompt_hash) == 64
-    assert "unknown or empty line IDs" in responses.calls[1]["input"]
-    assert responses.calls[0]["model"] == "gpt-5.6-terra"
-    assert responses.calls[0]["reasoning"] == {"effort": "medium"}
+    assert "unknown or empty line IDs" in responses.calls[1]["input"][1]["content"]
     assert responses.calls[0]["store"] is False
 
 
-def test_extraction_preserves_unresolved_errors(monkeypatch: pytest.MonkeyPatch) -> None:
-    invalid = {
-        "status": "complete",
-        "data": {"invoice_number": "INV-7"},
-        "evidence": [{"path": "/bad", "line_ids": ["p1-l0001"], "quote": "wrong"}],
-        "issues": [],
-    }
-    responses = FakeResponses([invalid, invalid.copy()])
+def test_chunk_merge_and_partial_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    def fake_call(**kwargs: Any) -> tuple[dict[str, Any], tuple[str, ...]]:
+        calls.append(kwargs["kind"])
+        return valid_result(), ("f" * 64,)
+
+    monkeypatch.setattr("liteparse_agentic_document_extraction.extraction._model_call", fake_call)
+    result = extract_document(
+        parsed_document(9), ProcessingOptions("Extract invoice number", strict_schema())
+    )
+    assert calls == ["extract", "extract", "merge"]
+    assert result.status == "complete"
+
+    count = 0
+
+    def one_failure(**kwargs: Any) -> tuple[dict[str, Any], tuple[str, ...]]:
+        nonlocal count
+        count += 1
+        if count == 1:
+            raise RuntimeError
+        return valid_result(), ("f" * 64,)
+
+    monkeypatch.setattr("liteparse_agentic_document_extraction.extraction._model_call", one_failure)
+    result = extract_document(
+        parsed_document(9), ProcessingOptions("Extract invoice number", strict_schema())
+    )
+    assert result.status == "partial"
+    assert result.issues[0].code == "extraction_chunk_failed"
+
+
+def test_process_document_preserves_markdown_on_extraction_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parsed = parsed_document()
     monkeypatch.setattr(
-        "liteparse_agentic_document_extraction.pipeline.get_openai_client",
-        lambda: SimpleNamespace(responses=responses),
+        "liteparse_agentic_document_extraction.pipeline.parse_document", lambda *_: parsed
     )
-    catalog = [LineEvidence("p1-l0001", 1, "Invoice INV-7", (1, 2, 3, 4), "ocr_300")]
-    result, _ = extract_data(
-        "Invoice INV-7", catalog, ProcessingOptions("Extract", strict_schema())
-    )
-    assert result["status"] == "partial"
-    assert {issue["code"] for issue in result["issues"]} == {"invalid_evidence"}
+
+    def fail(*_args: Any) -> None:
+        raise RuntimeError("provider detail")
+
+    monkeypatch.setattr("liteparse_agentic_document_extraction.pipeline.extract_document", fail)
+    artifact = process_document("invoice.png", png_bytes(), ProcessingOptions("Extract"))
+    assert artifact.status is RunStatus.PARTIAL
+    assert artifact.markdown
+    assert artifact.output["stages"]["extraction"] == "failed"
+    assert artifact.output["data"] is None
+    assert artifact.error is None
 
 
-def test_artifact_exports() -> None:
-    first = DocumentArtifact(
-        "Invoice 1.pdf",
-        b"pdf",
-        "a" * 64,
-        status=RunStatus.COMPLETE,
-        markdown="# One",
-        output={"status": "complete"},
+def test_process_document_complete_v2(monkeypatch: pytest.MonkeyPatch) -> None:
+    parsed = parsed_document()
+    extraction = ExtractionResult(
+        "complete",
+        {"invoice_number": "INV-1"},
+        tuple(valid_result()["evidence"]),
+        (),
+        ("b" * 64,),
     )
-    second = DocumentArtifact(
-        "Invoice 1.png",
-        b"png",
-        "b" * 64,
-        status=RunStatus.PARTIAL,
-        markdown="# Two",
-        output={"status": "partial"},
+    monkeypatch.setattr(
+        "liteparse_agentic_document_extraction.pipeline.parse_document", lambda *_: parsed
     )
-    failed = DocumentArtifact("bad.pdf", b"", "c" * 64, status=RunStatus.FAILED)
-    assert json.loads(artifact_json(first))["status"] == "complete"
-    with zipfile.ZipFile(io.BytesIO(result_zip([first, second, failed]))) as archive:
+    monkeypatch.setattr(
+        "liteparse_agentic_document_extraction.pipeline.extract_document", lambda *_: extraction
+    )
+    artifact = process_document("invoice.png", png_bytes(), ProcessingOptions("Extract"))
+    assert artifact.status is RunStatus.COMPLETE
+    assert artifact.output["schema_version"] == "2.0"
+    assert artifact.output["evidence"][0]["sources"][0]["bbox"] == [1, 2, 30, 10]
+    assert artifact.output["document"]["processed_pages"] == [1]
+
+
+def test_process_document_input_failure() -> None:
+    artifact = process_document("notes.txt", b"hello", ProcessingOptions("Extract"))
+    assert artifact.status is RunStatus.FAILED
+    assert artifact.error == "Unsupported file type: .txt"
+
+
+def test_artifact_exports_use_unique_names() -> None:
+    artifacts = [
+        DocumentArtifact(
+            "Invoice 1.pdf",
+            b"pdf",
+            str(index) * 64,
+            status=RunStatus.COMPLETE,
+            markdown=f"# {index}",
+            output={"status": "complete"},
+        )
+        for index in range(1, 4)
+    ]
+    assert json.loads(artifact_json(artifacts[0]))["status"] == "complete"
+    with zipfile.ZipFile(io.BytesIO(result_zip(artifacts))) as archive:
         assert archive.namelist() == [
             "Invoice_1.md",
             "Invoice_1.json",
-            "Invoice_1-bbbbbbbb.md",
-            "Invoice_1-bbbbbbbb.json",
+            "Invoice_1-2.md",
+            "Invoice_1-2.json",
+            "Invoice_1-3.md",
+            "Invoice_1-3.json",
         ]
-        assert archive.read("Invoice_1.md") == b"# One"
-
-
-class FakeTextItem:
-    text = "Invoice INV-7"
-    x = 10.0
-    y = 20.0
-    width = 30.0
-    height = 8.0
-    confidence = 0.9
-
-
-class FakePage:
-    page_num = 1
-    width = 72.0
-    height = 72.0
-    text_items: ClassVar[list[FakeTextItem]] = [FakeTextItem()]
-    blocks: ClassVar[list[Any]] = []
-
-
-def fake_result(image: bytes, total_pages: int = 1) -> SimpleNamespace:
-    shot = SimpleNamespace(page_num=1, width=100, height=100, image_bytes=image)
-    return SimpleNamespace(
-        total_pages=total_pages,
-        pages=[FakePage()],
-        screenshots=[shot],
-        text="# Invoice\n\nINV-7",
-        page_errors=[],
-    )
-
-
-def test_line_catalog_and_prompt() -> None:
-    catalog = _line_catalog(fake_result(png_bytes()), {1: [(0, 0, 50, 50)]})
-    assert catalog[0].source == "repair_400"
-    assert "p1-l0001" in _catalog_prompt(catalog)
-
-
-def test_hard_regions_include_ocr_and_grid(monkeypatch: pytest.MonkeyPatch) -> None:
-    image = png_bytes()
-    block = SimpleNamespace(
-        kind="grid_fallback", bbox=SimpleNamespace(x=36.0, y=36.0, width=18.0, height=18.0)
-    )
-    page = SimpleNamespace(page_num=1, width=72.0, height=72.0, blocks=[block])
-    shot = SimpleNamespace(page_num=1, width=100, height=100, image_bytes=image)
-    result = SimpleNamespace(pages=[page], screenshots=[shot])
-    ocr_record = SimpleNamespace(hard_regions=[SimpleNamespace(bbox=(5, 5, 10, 10), reason="tiny")])
-    monkeypatch.setattr(
-        "liteparse_agentic_document_extraction.pipeline.REGISTRY.base_record",
-        lambda *_: ocr_record,
-    )
-    regions = _hard_regions(result, "run")
-    assert len(regions) == 2
-    assert {region.reason for region, _digest in regions} == {"tiny", "LiteParse grid fallback"}
-
-
-def test_process_document_without_repairs(monkeypatch: pytest.MonkeyPatch) -> None:
-    image = png_bytes()
-    result = fake_result(image)
-
-    class FakeLiteParse:
-        def __init__(self, **_kwargs: Any) -> None:
-            pass
-
-        def parse(self, _source: Any) -> SimpleNamespace:
-            return result
-
-    monkeypatch.setattr("liteparse_agentic_document_extraction.pipeline.LiteParse", FakeLiteParse)
-    monkeypatch.setattr(
-        "liteparse_agentic_document_extraction.pipeline._hard_regions", lambda *_: []
-    )
-    monkeypatch.setattr(
-        "liteparse_agentic_document_extraction.pipeline.extract_data",
-        lambda *_: (
-            {
-                "status": "complete",
-                "data": {"document_type": "invoice", "fields": []},
-                "evidence": [
-                    {"path": "/data/document_type", "line_ids": ["p1-l0001"], "quote": "Invoice"}
-                ],
-                "issues": [],
-            },
-            "e" * 64,
-        ),
-    )
-    artifact = process_document("invoice.png", image, ProcessingOptions("Extract"))
-    assert artifact.status == RunStatus.COMPLETE
-    assert artifact.markdown.startswith("# Invoice")
-    assert artifact.output["evidence"][0]["sources"][0]["id"] == "p1-l0001"
-    assert artifact.output["document"]["base_dpi"] == 300
-
-
-def test_process_document_with_repair(monkeypatch: pytest.MonkeyPatch) -> None:
-    image = png_bytes()
-    result = fake_result(image)
-    parse_calls: list[dict[str, Any]] = []
-
-    class FakeLiteParse:
-        def __init__(self, **kwargs: Any) -> None:
-            parse_calls.append(kwargs)
-
-        def parse(self, _source: Any) -> SimpleNamespace:
-            return result
-
-    monkeypatch.setattr("liteparse_agentic_document_extraction.pipeline.LiteParse", FakeLiteParse)
-    monkeypatch.setattr(
-        "liteparse_agentic_document_extraction.pipeline._hard_regions",
-        lambda *_: [(Region(1, (20, 20, 60, 60), "blur"), "digest")],
-    )
-    monkeypatch.setattr(
-        "liteparse_agentic_document_extraction.pipeline.REGISTRY.repair_record",
-        lambda *_: SimpleNamespace(),
-    )
-    monkeypatch.setattr(
-        "liteparse_agentic_document_extraction.pipeline.REGISTRY.patch_base",
-        lambda *_: (2, 1),
-    )
-    monkeypatch.setattr(
-        "liteparse_agentic_document_extraction.pipeline.extract_data",
-        lambda *_: (
-            {"status": "partial", "data": None, "evidence": [], "issues": []},
-            "e" * 64,
-        ),
-    )
-    artifact = process_document("invoice.png", image, ProcessingOptions("Extract"))
-    assert artifact.status == RunStatus.PARTIAL
-    assert artifact.output["repairs"][0]["replaced_lines"] == 2
-    assert any(call.get("dpi") == 400 for call in parse_calls)
-    assert any(
-        call.get("ocr_server_headers", {}).get("X-OCR-Stage") == "final" for call in parse_calls
-    )
-
-
-def test_process_document_rejects_too_many_pages(monkeypatch: pytest.MonkeyPatch) -> None:
-    image = png_bytes()
-
-    class FakeLiteParse:
-        def __init__(self, **_kwargs: Any) -> None:
-            pass
-
-        def parse(self, _source: Any) -> SimpleNamespace:
-            return fake_result(image, total_pages=101)
-
-    monkeypatch.setattr("liteparse_agentic_document_extraction.pipeline.LiteParse", FakeLiteParse)
-    artifact = process_document("invoice.png", image, ProcessingOptions("Extract"))
-    assert artifact.status == RunStatus.FAILED
-    assert artifact.error == "Document exceeds 100 pages; select at most 100 pages"
-
-
-def test_process_document_contains_invalid_upload_failure() -> None:
-    artifact = process_document("notes.txt", b"hello", ProcessingOptions("Extract"))
-
-    assert artifact.status == RunStatus.FAILED
-    assert artifact.error == "Unsupported file type: .txt"

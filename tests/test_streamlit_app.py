@@ -1,14 +1,24 @@
 """Headless smoke test for the Streamlit UI."""
 
-from pathlib import Path
-
 from streamlit.testing.v1 import AppTest
 
 
 def test_initial_ui_renders_without_errors() -> None:
-    app_path = Path(__file__).resolve().parents[1] / "streamlit_app.py"
-    app = AppTest.from_file(app_path).run(timeout=10)
+    def render_ui() -> None:
+        import runpy
+
+        import liteparse_agentic_document_extraction.ui
+
+        runpy.run_path(liteparse_agentic_document_extraction.ui.__file__)
+
+    app = AppTest.from_function(render_ui).run(timeout=10)
     assert not app.exception
     assert app.title[0].value == "Agentic document extraction"
     assert "Clear session" in [button.label for button in app.button]
     assert app.info[0].value.startswith("Upload one or more documents")
+
+    app.button(key="FormSubmitter:processing_options-Process files").click().run()
+    assert app.error[0].value == "Upload at least one document."
+
+    next(button for button in app.button if button.label == "Clear session").click().run()
+    assert not app.exception

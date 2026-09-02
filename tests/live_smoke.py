@@ -50,8 +50,12 @@ def main() -> None:
                 "error": artifact.error,
             }
         )
-        if artifact.error:
-            raise RuntimeError(artifact.error)
+        if artifact.status.value == "failed" or artifact.error:
+            raise RuntimeError(artifact.error or "Live extraction failed")
+        if not artifact.markdown or artifact.output.get("data") is None:
+            raise RuntimeError("Live extraction produced incomplete output")
+        if not artifact.output.get("evidence"):
+            raise RuntimeError("Live extraction produced no grounded evidence")
     finally:
         server.should_exit = True
         thread.join(timeout=5)
