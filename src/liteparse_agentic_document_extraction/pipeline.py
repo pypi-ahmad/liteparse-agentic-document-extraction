@@ -31,7 +31,7 @@ from .models import (
 from .ocr_bridge import REGISTRY, get_openai_client, image_digest
 from .prompts import load_prompt
 
-OCR_URL = "http://127.0.0.1:8501/api/ocr"
+OCR_URL = "http://127.0.0.1:9578/api/ocr"
 MAX_FILE_BYTES = 50 * 1024 * 1024
 MAX_FILES = 20
 MAX_PAGES = 100

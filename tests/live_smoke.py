@@ -18,7 +18,7 @@ def main() -> None:
     """Run local OCR route and process one generated invoice image."""
     route_app = Starlette(routes=[Route("/api/ocr", ocr_endpoint, methods=["POST"])])
     server = uvicorn.Server(
-        uvicorn.Config(route_app, host="127.0.0.1", port=8501, log_level="warning")
+        uvicorn.Config(route_app, host="127.0.0.1", port=9578, log_level="warning")
     )
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()

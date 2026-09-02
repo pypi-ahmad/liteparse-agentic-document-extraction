@@ -24,7 +24,10 @@ uv sync --all-groups
 uv run python asgi_app.py
 ```
 
-Open <http://127.0.0.1:8501>.
+Or launch on Windows with `launch.cmd`. The launcher clears any process already listening on
+the app port before starting.
+
+Open <http://127.0.0.1:9578>.
 
 The app keeps uploads and outputs only in current Streamlit session and temporary directories.
 Model requests use `store=False`. Files are still sent to configured OpenAI endpoint for OCR

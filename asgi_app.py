@@ -14,4 +14,4 @@ app = st.App(
 )
 
 if __name__ == "__main__":
-    app.run(config={"server.address": "127.0.0.1", "server.port": 8501})
+    app.run(config={"server.address": "127.0.0.1", "server.port": 9578})
