@@ -52,7 +52,7 @@ The app binds to `127.0.0.1`; it is not configured as a remote multi-user servic
 |---|---|---|
 | Extraction schema | None | Uses the generic document type and field-list schema. |
 | Language hint | `auto` | Guides OCR language recognition. |
-| Pages | All | Accepts values such as `1-5,8`. |
+| Pages | All | Switch to Range and select inclusive start and end pages. |
 | Repeated headers/footers | Off | Includes repeated elements when enabled. |
 | Markdown images | `placeholder` | Also supports `off` and `embed`. |
 

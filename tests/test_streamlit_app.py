@@ -16,6 +16,11 @@ def test_initial_ui_renders_without_errors() -> None:
     assert app.title[0].value == "Agentic document extraction"
     assert "Clear session" in [button.label for button in app.button]
     assert app.info[0].value.startswith("Upload one or more documents")
+    assert app.segmented_control(key="page_scope").value == "All"
+
+    app.segmented_control(key="page_scope").set_value("Range").run()
+    assert [item.label for item in app.number_input] == ["Start page", "End page"]
+    assert not app.exception
 
     app.button(key="FormSubmitter:processing_options-Process files").click().run()
     assert app.error[0].value == "Upload at least one document."

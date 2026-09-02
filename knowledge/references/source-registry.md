@@ -40,4 +40,4 @@ All records were accessed on 2026-09-02. Product, price, quota, model, and reten
 | ade-cli | https://github.com/landing-ai/ade-cli | source repository |
 | ade-docvqa | https://github.com/landing-ai/ade-docvqa-benchmark | vendor benchmark code |
 
-The Medium article is retained at the user’s request but is not authority for current LlamaParse contracts. The legacy reader is retained to document its deprecation.
+The Medium article is retained at the user's request but is not authority for current LlamaParse contracts. The legacy reader documents its deprecation.

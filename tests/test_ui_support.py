@@ -8,7 +8,24 @@ import pytest
 
 import liteparse_agentic_document_extraction
 from liteparse_agentic_document_extraction import server
-from liteparse_agentic_document_extraction.ui_support import read_schema
+from liteparse_agentic_document_extraction.ui_support import build_page_range, read_schema
+
+
+@pytest.mark.parametrize(
+    ("scope", "start", "end", "expected"),
+    [
+        ("All", 1, 1, None),
+        ("Range", 3, 3, "3"),
+        ("Range", 2, 8, "2-8"),
+    ],
+)
+def test_build_page_range(scope: str, start: int, end: int, expected: str | None) -> None:
+    assert build_page_range(scope, start, end) == expected
+
+
+def test_build_page_range_rejects_descending_range() -> None:
+    with pytest.raises(ValueError, match="Start page"):
+        build_page_range("Range", 8, 2)
 
 
 @pytest.mark.parametrize(

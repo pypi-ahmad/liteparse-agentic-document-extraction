@@ -24,7 +24,7 @@ from liteparse_agentic_document_extraction.settings import (
     REASONING_EFFORT,
     REPAIR_DPI,
 )
-from liteparse_agentic_document_extraction.ui_support import read_schema
+from liteparse_agentic_document_extraction.ui_support import build_page_range, read_schema
 
 st.set_page_config(
     page_title="Agentic document extraction",
@@ -64,7 +64,18 @@ with st.sidebar:
 
         with st.expander("Advanced options"):
             language = st.text_input("Language hint", value="auto")
-            target_pages = st.text_input("Pages", placeholder="All pages, or 1-5,8")
+            page_scope = st.segmented_control(
+                "Pages", ["All", "Range"], default="All", key="page_scope"
+            )
+            start_page = end_page = 1
+            if page_scope == "Range":
+                with st.container(horizontal=True):
+                    start_page = st.number_input(
+                        "Start page", min_value=1, value=1, step=1, key="start_page"
+                    )
+                    end_page = st.number_input(
+                        "End page", min_value=1, value=1, step=1, key="end_page"
+                    )
             keep_headers = st.toggle("Keep repeated headers and footers", value=False)
             image_mode = st.selectbox("Markdown images", ["placeholder", "off", "embed"])
             st.text_input("Model", value=MODEL_ID, disabled=True)
@@ -95,11 +106,12 @@ if process:
         try:
             schema = read_schema(schema_mode or "None", pasted_schema, uploaded_schema)
             validate_user_schema(schema)
+            target_pages = build_page_range(page_scope or "All", start_page, end_page)
             options = ProcessingOptions(
                 instructions=instructions,
                 schema=schema,
                 language=language.strip() or "auto",
-                target_pages=target_pages.strip() or None,
+                target_pages=target_pages,
                 keep_headers_footers=keep_headers,
                 image_mode=image_mode,
             )

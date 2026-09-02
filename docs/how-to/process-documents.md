@@ -17,17 +17,12 @@ file may be at most 50 MB, and the combined batch may be at most 500 MB.
 
 ## Process selected PDF pages
 
-Open **Advanced options** and enter pages using comma-separated numbers and inclusive ranges:
+Open **Advanced options**, change **Pages** from **All** to **Range**, then select inclusive
+**Start page** and **End page** values. Page numbers start at 1. A range may contain at most 100
+pages and cannot exceed the source document's page count. Keep **All** to process the whole
+document; an unselected document over 100 pages is rejected.
 
-```text
-1-5,8,12
-```
-
-Page numbers start at 1. A selection may contain at most 100 distinct pages and cannot exceed
-the source document's page count. Leave the field empty to process the whole document; an
-unselected document over 100 pages is rejected.
-
-The same page expression applies independently to every file in the submitted batch. A file
+The same page range applies independently to every file in the submitted batch. A file
 whose page count is lower than the highest selected page fails while other uploads continue.
 Images are one-page documents: leave the field empty or select page `1`; any higher page fails
 preflight validation.

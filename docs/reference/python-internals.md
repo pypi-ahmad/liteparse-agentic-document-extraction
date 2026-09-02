@@ -91,5 +91,6 @@ are separate. The loader performs a single placeholder substitution pass, so rep
 containing `{{...}}` is not recursively interpreted.
 
 `load_prompt(name, **values)` returns rendered text and the SHA-256 hash of the original
-template. `read_schema(mode, pasted, uploaded)` parses and size-checks the UI's optional schema.
-Both raise ordinary file, JSON, or `ValueError` exceptions for their callers to handle.
+template. `build_page_range(scope, start_page, end_page)` converts the UI selection to
+LiteParse syntax, while `read_schema(mode, pasted, uploaded)` parses and size-checks the UI's
+optional schema. They raise ordinary file, JSON, or `ValueError` exceptions for callers.

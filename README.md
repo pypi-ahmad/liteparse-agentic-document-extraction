@@ -3,12 +3,12 @@
 [![CI](https://github.com/pypi-ahmad/liteparse-agentic-document-extraction/actions/workflows/ci.yml/badge.svg)](https://github.com/pypi-ahmad/liteparse-agentic-document-extraction/actions/workflows/ci.yml)
 
 Convert scanned PDFs and images into layout-aware Markdown and evidence-grounded JSON.
-LiteParse reconstructs document structure while GPT-5.6 Terra performs OCR, identifies hard
-regions, and extracts typed fields.
+LiteParse reconstructs document structure. GPT-5.6 Terra performs OCR, identifies hard regions,
+and extracts typed fields.
 
 ## What it does
 
-- Upload one or many PDFs or images through a local Streamlit interface.
+- Upload PDFs or images through the local Streamlit interface.
 - OCR every page at 300 DPI and retry difficult regions at 400 DPI.
 - Preserve layout as Markdown and extract fields with optional JSON Schema.
 - Ground every non-null extracted value in quoted document lines.
@@ -72,9 +72,10 @@ existing listener on port `9578` before starting the app.
 2. Upload PDF, PNG, JPEG, TIFF, or WebP files.
 3. Describe the fields you want under **Extraction instructions**.
 4. Optionally paste or upload a strict JSON Schema.
-5. Select **Process files**.
-6. Review **Source**, **Markdown**, **JSON**, and **Run details**.
-7. Download individual results or **Download all results (.zip)**.
+5. Optionally choose **All** pages or an inclusive **Start page** and **End page** range.
+6. Select **Process files**.
+7. Review **Source**, **Markdown**, **JSON**, and **Run details**.
+8. Download individual results or **Download all results (.zip)**.
 
 Start with the [first-document tutorial](docs/tutorials/first-document.md) or read the complete
 [documentation index](docs/README.md).
@@ -98,7 +99,7 @@ See [configuration and limits](docs/reference/configuration.md) for the complete
 
 ## Outputs
 
-Each successfully parsed document can produce:
+For each successfully parsed document, the app can produce:
 
 - Markdown preserving headings, paragraphs, tables, and reading order where LiteParse detects
   them.
@@ -111,11 +112,11 @@ Bounding boxes use `[x1, y1, x2, y2]` in a top-left 72-DPI page viewport. See th
 
 ## Privacy and cost
 
-Uploads, OCR caches, and generated artifacts are held only for the active local session or in
-temporary directories. Model requests use `store=False`. Document images and parsed content
-are still sent to the configured OpenAI endpoint, and processing consumes API credits.
-Files you download remain in the browser's download location until you delete them; **Clear
-session** cannot remove downloaded copies.
+The app keeps uploads, OCR caches, and generated artifacts only for the active local session or
+in temporary directories. Model requests use `store=False`. The configured OpenAI endpoint still
+receives document images and parsed content, and processing consumes API credits. Downloaded
+files remain in the browser's download location until you delete them. **Clear session** cannot
+remove downloaded copies.
 
 ## Development
 
@@ -142,7 +143,8 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing code or prompts.
 - [Use a custom extraction schema](docs/how-to/use-a-custom-schema.md)
 - [Troubleshoot failures](docs/how-to/troubleshooting.md)
 - [Architecture](docs/codebase/architecture.md)
+- [Understanding LiteParse](docs/explanation/understanding-liteparse.md)
 - [Developer internals](docs/reference/python-internals.md)
-- [Research knowledge base](knowledge/index.md) — draft, unverified background research
+- [Research knowledge base](knowledge/index.md) (draft, unverified background research)
 
 Repository: <https://github.com/pypi-ahmad/liteparse-agentic-document-extraction>

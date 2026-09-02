@@ -60,8 +60,8 @@ start with a valid PDF signature.
 
 ## A page selection is rejected
 
-Use positive, 1-based numbers such as `1-5,8`. Descending ranges, empty entries, non-numeric
-values, more than 100 selected pages, and pages beyond the document are invalid.
+Use positive, 1-based **Start page** and **End page** values. The start cannot exceed the end.
+Ranges over 100 pages and page numbers beyond the document are invalid.
 
 ## A custom schema is rejected
 

@@ -1,7 +1,7 @@
-# Tutorial: Process your first scanned document
+# Tutorial: process your first scanned document
 
-This tutorial takes a new user from a clean checkout to Markdown and structured JSON from one
-scanned invoice.
+This tutorial shows how to turn one scanned invoice into Markdown and structured JSON, starting
+from a clean checkout.
 
 **Time:** about 10 minutes, plus model processing time  
 **Level:** beginner
@@ -64,7 +64,7 @@ Use the four result tabs:
 - **JSON** shows extracted fields, evidence, repairs, and issues.
 - **Run details** summarizes pages, status, model, and repair count.
 
-A successful synthetic result resembles:
+A successful synthetic result looks like this:
 
 ```json
 {
@@ -93,7 +93,7 @@ ZIP contains one `.md` and one `.json` file per usable upload.
 
 ## Checkpoint
 
-You have succeeded when:
+You are done when:
 
 - the run status is `complete` or `partial`;
 - Markdown is nonempty;

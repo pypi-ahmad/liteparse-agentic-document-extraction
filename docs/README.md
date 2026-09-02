@@ -36,6 +36,7 @@ Use this page to choose the shortest path to your goal. The documentation follow
 
 ## Explanation and operations
 
+- [Understanding LiteParse](explanation/understanding-liteparse.md)
 - [Architecture](codebase/architecture.md)
 - [Processing flow](codebase/processing-flow.md)
 - [300/400-DPI repair strategy](codebase/repair-strategy.md)
@@ -61,4 +62,5 @@ source and tests as authority for application behavior.
 | Interpret success and degradation | [Output JSON](reference/output-json.md) |
 | Diagnose a problem | [Troubleshooting](how-to/troubleshooting.md) |
 | Understand or change the implementation | [Architecture](codebase/architecture.md) |
+| Learn what LiteParse does and how it is used | [Understanding LiteParse](explanation/understanding-liteparse.md) |
 | Validate and contribute changes | [Contributing](../CONTRIBUTING.md) |
