@@ -1,0 +1,46 @@
+[project]
+name = "liteparse-agentic-document-extraction"
+version = "0.1.0"
+description = "Layout-aware scanned document extraction with LiteParse and GPT-5.6 Terra"
+readme = "README.md"
+requires-python = ">=3.14.7"
+dependencies = [
+    "jsonschema>=4,<5",
+    "liteparse>=2.14,<3",
+    "openai>=3.7,<4",
+    "pillow>=12,<13",
+    "pydantic>=2,<3",
+    "python-multipart>=0.0.20,<1",
+    "starlette>=0.47,<1",
+    "streamlit>=1.62,<2",
+]
+
+[project.scripts]
+liteparse-ade = "liteparse_agentic_document_extraction:main"
+
+[build-system]
+requires = ["uv_build>=0.12.7,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28,<1",
+    "pytest>=8,<10",
+    "pytest-cov>=6,<8",
+    "ruff>=0.12,<1",
+    "ty>=0.0.1a20,<1",
+]
+
+[tool.pytest.ini_options]
+addopts = "--cov=liteparse_agentic_document_extraction --cov-report=term-missing --cov-fail-under=90"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ty.environment]
+python-version = "3.14"
