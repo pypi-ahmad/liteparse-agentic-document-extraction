@@ -10,6 +10,6 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%LITEPARSE_APP_PORT% 
 )
 
 echo Starting LiteParse app at http://127.0.0.1:%LITEPARSE_APP_PORT% ...
-uv run python asgi_app.py
+uv run liteparse-ade
 
 endlocal

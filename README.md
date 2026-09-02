@@ -21,7 +21,7 @@ uses `OPENAI_BASE_URL` when configured.
 
 ```powershell
 uv sync --all-groups
-uv run python asgi_app.py
+uv run liteparse-ade
 ```
 
 Or launch on Windows with `launch.cmd`. The launcher clears any process already listening on
@@ -38,10 +38,12 @@ and extraction.
 - GPT-5.6 Terra, medium reasoning, original image detail
 - 300 DPI base rendering
 - Automatic 400 DPI rerender for hard regions
-- Maximum 20 files, 50 MB each, 100 processed pages per document
+- Maximum 20 files, 50 MB each, 500 MB per batch, 100 processed pages per document
+- Maximum 8 repairs per page and 64 repairs per document
 - PDF, PNG, JPEG, TIFF, and WebP inputs
 
-All model instructions live in Markdown under `prompts/`.
+All model instructions are packaged Markdown under
+`src/liteparse_agentic_document_extraction/prompt_templates/`.
 
 ## Verify
 
@@ -50,7 +52,10 @@ uv run pytest
 uv run ruff format --check .
 uv run ruff check .
 uv run ty check
+uv build
 ```
+
+Implementation notes are in [`docs/codebase`](docs/codebase/architecture.md).
 
 Optional synthetic live check (uses OpenAI API credits):
 
