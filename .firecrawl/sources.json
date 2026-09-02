@@ -1,0 +1,32 @@
+{
+  "retrieved_at": "2026-09-02T13:15:46+05:30",
+  "collection_mode": "reference",
+  "firecrawl_status": "search_and_scrape_unavailable_http_402",
+  "sources": [
+    {"id":"liteparse-product","url":"https://www.llamaindex.ai/liteparse","tier":"first-party-product","snapshot_path":"www.llamaindex.ai/liteparse/index.md"},
+    {"id":"liteparse-repo","url":"https://github.com/run-llama/liteparse","tier":"source-repository","snapshot_path":"github.com/run-llama/liteparse/index.md"},
+    {"id":"liteparse-overview","url":"https://developers.llamaindex.ai/liteparse/","tier":"first-party-docs","snapshot_path":"developers.llamaindex.ai/liteparse/index.md"},
+    {"id":"liteparse-complexity","url":"https://developers.llamaindex.ai/liteparse/guides/complexity/","tier":"first-party-docs","snapshot_path":"developers.llamaindex.ai/liteparse/guides/complexity/index.md"},
+    {"id":"liteparse-markdown","url":"https://developers.llamaindex.ai/liteparse/guides/markdown/","tier":"first-party-docs","snapshot_path":"developers.llamaindex.ai/liteparse/guides/markdown/index.md"},
+    {"id":"llamaparse-product","url":"https://www.llamaindex.ai/llamaparse","tier":"first-party-product","snapshot_path":"www.llamaindex.ai/llamaparse/index.md"},
+    {"id":"llamaparse-overview","url":"https://developers.llamaindex.ai/llamaparse/","tier":"first-party-docs","snapshot_path":"developers.llamaindex.ai/llamaparse/index.md"},
+    {"id":"llamaparse-tiers","url":"https://developers.llamaindex.ai/llamaparse/parse/guides/tiers/","tier":"first-party-docs","snapshot_path":"developers.llamaindex.ai/llamaparse/parse/guides/tiers/index.md"},
+    {"id":"llamaparse-pricing","url":"https://developers.llamaindex.ai/llamaparse/general/pricing/index.md","tier":"first-party-docs","snapshot_path":"developers.llamaindex.ai/llamaparse/general/pricing/index.md"},
+    {"id":"llamaparse-limits","url":"https://developers.llamaindex.ai/llamaparse/general/limitations/index.md","tier":"first-party-docs","snapshot_path":"developers.llamaindex.ai/llamaparse/general/limitations/index.md"},
+    {"id":"llamaparse-types","url":"https://developers.llamaindex.ai/llamaparse/general/supported_document_types/index.md","tier":"first-party-docs","snapshot_path":"developers.llamaindex.ai/llamaparse/general/supported_document_types/index.md"},
+    {"id":"legacy-reader","url":"https://github.com/run-llama/llama_index/blob/main/llama-index-integrations/readers/llama-index-readers-llama-parse/README.md","tier":"deprecated-primary","snapshot_path":"github.com/run-llama/llama_index/legacy-reader/index.md"},
+    {"id":"llamacloud-sdk","url":"https://github.com/run-llama/llama-cloud-py","tier":"source-repository","snapshot_path":"github.com/run-llama/llama-cloud-py/index.md"},
+    {"id":"medium-article","url":"https://medium.com/@rohitobrai11/llamaparse-a-genai-native-solution-for-high-quality-document-parsing-d97b85380dc0","tier":"secondary-historical","snapshot_path":"medium.com/rohitobrai11/llamaparse/index.md"},
+    {"id":"landing-home","url":"https://landing.ai/","tier":"first-party-product","snapshot_path":"landing.ai/index.md"},
+    {"id":"ade-parse","url":"https://landing.ai/ade/parse","tier":"first-party-product","snapshot_path":"landing.ai/ade/parse/index.md"},
+    {"id":"ade-overview","url":"https://docs.landing.ai/ade/ade-overview","tier":"first-party-docs","snapshot_path":"docs.landing.ai/ade/ade-overview/index.md"},
+    {"id":"ade-input","url":"https://docs.landing.ai/dpt3/parse-input","tier":"first-party-docs","snapshot_path":"docs.landing.ai/dpt3/parse-input/index.md"},
+    {"id":"ade-models","url":"https://docs.landing.ai/dpt3/parse-models","tier":"first-party-docs","snapshot_path":"docs.landing.ai/dpt3/parse-models/index.md"},
+    {"id":"ade-credit-consumption","url":"https://docs.landing.ai/dpt3/credit-consumption","tier":"first-party-docs","snapshot_path":"docs.landing.ai/dpt3/credit-consumption/index.md"},
+    {"id":"ade-rate-limits","url":"https://docs.landing.ai/dpt3/rate-limits","tier":"first-party-docs","snapshot_path":"docs.landing.ai/dpt3/rate-limits/index.md"},
+    {"id":"ade-zdr","url":"https://docs.landing.ai/ade/zdr","tier":"first-party-docs","snapshot_path":"docs.landing.ai/ade/zdr/index.md"},
+    {"id":"ade-python","url":"https://github.com/landing-ai/ade-python","tier":"source-repository","snapshot_path":"github.com/landing-ai/ade-python/index.md"},
+    {"id":"ade-cli","url":"https://github.com/landing-ai/ade-cli","tier":"source-repository","snapshot_path":"github.com/landing-ai/ade-cli/index.md"},
+    {"id":"ade-docvqa","url":"https://github.com/landing-ai/ade-docvqa-benchmark","tier":"vendor-benchmark-code","snapshot_path":"github.com/landing-ai/ade-docvqa-benchmark/index.md"}
+  ]
+}
