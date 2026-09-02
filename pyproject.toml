@@ -35,6 +35,9 @@ dev = [
 addopts = "--cov=liteparse_agentic_document_extraction --cov-report=term-missing --cov-fail-under=90"
 testpaths = ["tests"]
 
+[tool.coverage.run]
+concurrency = ["thread"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py314"

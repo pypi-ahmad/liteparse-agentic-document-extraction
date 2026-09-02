@@ -10,7 +10,6 @@ import uuid
 from dataclasses import dataclass, field
 from functools import lru_cache
 from hashlib import sha256
-from typing import Any
 
 from openai import OpenAI
 from PIL import Image
@@ -19,8 +18,14 @@ from starlette.datastructures import UploadFile
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from .models import MODEL_ID, REASONING_EFFORT, HardRegion, OcrLine, OcrOutput
+from .models import HardRegion, OcrLine, OcrOutput, OcrStage
 from .prompts import load_prompt
+from .settings import (
+    MAX_RENDERED_PIXELS,
+    MODEL_ID,
+    OPENAI_TIMEOUT_SECONDS,
+    REASONING_EFFORT,
+)
 
 LOGGER = logging.getLogger(__name__)
 MAX_OCR_BODY_BYTES = 30 * 1024 * 1024
@@ -35,8 +40,9 @@ class OcrPageRecord:
     height: int
     results: list[OcrLine]
     hard_regions: list[HardRegion]
-    prompt_hash: str
+    prompt_hashes: tuple[str, ...]
     region_id: str | None = None
+    repaired_fingerprints: set[tuple[str, float, float, float, float]] = field(default_factory=set)
 
 
 @dataclass(slots=True)
@@ -50,14 +56,16 @@ class RunCache:
 @lru_cache(maxsize=1)
 def get_openai_client() -> OpenAI:
     """Create one SDK client using process environment configuration."""
-    return OpenAI()
+    return OpenAI(timeout=OPENAI_TIMEOUT_SECONDS, max_retries=2)
 
 
 def image_digest(image_bytes: bytes) -> tuple[str, int, int]:
     """Hash decoded pixels so equivalent PNG encodings share a cache key."""
     with Image.open(io.BytesIO(image_bytes)) as image:
+        width, height = image.size
+        if width * height > MAX_RENDERED_PIXELS:
+            raise ValueError("Rendered image exceeds the 40-million-pixel limit")
         rgb = image.convert("RGB")
-        width, height = rgb.size
         payload = width.to_bytes(4, "big") + height.to_bytes(4, "big") + rgb.tobytes()
     return sha256(payload).hexdigest(), width, height
 
@@ -69,7 +77,22 @@ def _bounded_output(output: OcrOutput, width: int, height: int) -> OcrOutput:
         x1, y1, x2, y2 = line.bbox
         box = (max(0.0, x1), max(0.0, y1), min(float(width), x2), min(float(height), y2))
         if box[2] > box[0] and box[3] > box[1] and line.text.strip():
-            lines.append(line.model_copy(update={"text": line.text.strip(), "bbox": list(box)}))
+            polygon = None
+            if line.polygon:
+                points = [
+                    [
+                        min(float(width), max(0.0, point[0])),
+                        min(float(height), max(0.0, point[1])),
+                    ]
+                    for point in line.polygon
+                    if len(point) >= 2
+                ]
+                polygon = points if len(points) >= 3 else None
+            lines.append(
+                line.model_copy(
+                    update={"text": line.text.strip(), "bbox": list(box), "polygon": polygon}
+                )
+            )
 
     regions: list[HardRegion] = []
     for region in output.hard_regions:
@@ -82,8 +105,9 @@ def _bounded_output(output: OcrOutput, width: int, height: int) -> OcrOutput:
 
 def call_terra_ocr(image_bytes: bytes, language: str, width: int, height: int) -> OcrPageRecord:
     """OCR and inspect one page image with Terra."""
-    prompt, prompt_hash = load_prompt(
-        "ocr.md", LANGUAGE=language or "auto", WIDTH=str(width), HEIGHT=str(height)
+    developer_prompt, developer_hash = load_prompt("ocr-developer.md")
+    user_prompt, user_hash = load_prompt(
+        "ocr-user.md", LANGUAGE=language or "auto", WIDTH=str(width), HEIGHT=str(height)
     )
     encoded = base64.b64encode(image_bytes).decode("ascii")
     response = get_openai_client().responses.parse(
@@ -92,16 +116,20 @@ def call_terra_ocr(image_bytes: bytes, language: str, width: int, height: int) -
         store=False,
         input=[
             {
+                "role": "developer",
+                "content": [{"type": "input_text", "text": developer_prompt}],
+            },
+            {
                 "role": "user",
                 "content": [
-                    {"type": "input_text", "text": prompt},
+                    {"type": "input_text", "text": user_prompt},
                     {
                         "type": "input_image",
                         "image_url": f"data:image/png;base64,{encoded}",
                         "detail": "original",
                     },
                 ],
-            }
+            },
         ],
         text_format=OcrOutput,
     )
@@ -115,7 +143,7 @@ def call_terra_ocr(image_bytes: bytes, language: str, width: int, height: int) -
         height=height,
         results=output.results,
         hard_regions=output.hard_regions,
-        prompt_hash=prompt_hash,
+        prompt_hashes=(developer_hash, user_hash),
     )
 
 
@@ -144,7 +172,12 @@ class OcrRegistry:
             return run_id in self._runs
 
     def recognize(
-        self, run_id: str, stage: str, region_id: str | None, image_bytes: bytes, language: str
+        self,
+        run_id: str,
+        stage: OcrStage,
+        region_id: str | None,
+        image_bytes: bytes,
+        language: str,
     ) -> list[OcrLine]:
         """Return cached OCR or call Terra, recording base and repair results."""
         digest, width, height = image_digest(image_bytes)
@@ -152,9 +185,9 @@ class OcrRegistry:
             run = self._runs.get(run_id)
             if run is None:
                 raise PermissionError("inactive OCR run")
-            if stage in {"base", "final"} and digest in run.base:
+            if stage in {OcrStage.BASE, OcrStage.FINAL} and digest in run.base:
                 return list(run.base[digest].results)
-            if stage == "repair" and region_id and region_id in run.repairs:
+            if stage is OcrStage.REPAIR and region_id and region_id in run.repairs:
                 return list(run.repairs[region_id].results)
 
         record = call_terra_ocr(image_bytes, language, width, height)
@@ -163,7 +196,7 @@ class OcrRegistry:
             run = self._runs.get(run_id)
             if run is None:
                 raise PermissionError("inactive OCR run")
-            if stage == "repair" and region_id:
+            if stage is OcrStage.REPAIR and region_id:
                 run.repairs[region_id] = record
             else:
                 run.base[digest] = record
@@ -180,47 +213,6 @@ class OcrRegistry:
         with self._lock:
             run = self._runs.get(run_id)
             return run.repairs.get(region_id) if run else None
-
-    def patch_base(
-        self,
-        run_id: str,
-        digest: str,
-        inner_box: tuple[float, float, float, float],
-        crop_box: tuple[float, float, float, float],
-        repair: OcrPageRecord,
-    ) -> tuple[int, int]:
-        """Replace base lines inside a region with mapped 400-DPI lines."""
-        with self._lock:
-            run = self._runs[run_id]
-            base = run.base[digest]
-            left = crop_box[3] * base.width
-            top = crop_box[0] * base.height
-            kept_width = (1.0 - crop_box[1] - crop_box[3]) * base.width
-            kept_height = (1.0 - crop_box[0] - crop_box[2]) * base.height
-            scale_x = kept_width / repair.width
-            scale_y = kept_height / repair.height
-
-            def inside(box: list[float] | tuple[float, float, float, float]) -> bool:
-                cx = (box[0] + box[2]) / 2
-                cy = (box[1] + box[3]) / 2
-                return inner_box[0] <= cx <= inner_box[2] and inner_box[1] <= cy <= inner_box[3]
-
-            original_count = len(base.results)
-            preserved = [line for line in base.results if not inside(line.bbox)]
-            mapped: list[OcrLine] = []
-            for line in repair.results:
-                x1, y1, x2, y2 = line.bbox
-                box = (
-                    left + x1 * scale_x,
-                    top + y1 * scale_y,
-                    left + x2 * scale_x,
-                    top + y2 * scale_y,
-                )
-                if inside(box):
-                    mapped.append(line.model_copy(update={"bbox": list(box)}))
-            mapped.sort(key=lambda line: (line.bbox[1], line.bbox[0]))
-            base.results = sorted(preserved + mapped, key=lambda line: (line.bbox[1], line.bbox[0]))
-            return original_count - len(preserved), len(mapped)
 
 
 REGISTRY = OcrRegistry()
@@ -248,7 +240,10 @@ async def ocr_endpoint(request: Request) -> Response:
             return JSONResponse({"error": "missing file"}, status_code=400)
         image_bytes = await upload.read()
         language = str(form.get("language", "auto"))
-        stage = request.headers.get("x-ocr-stage", "base")
+        try:
+            stage = OcrStage(request.headers.get("x-ocr-stage", OcrStage.BASE))
+        except ValueError:
+            return JSONResponse({"error": "invalid OCR stage"}, status_code=400)
         region_id = request.headers.get("x-region-id")
         lines = await run_in_threadpool(
             REGISTRY.recognize, run_id, stage, region_id, image_bytes, language
@@ -256,16 +251,6 @@ async def ocr_endpoint(request: Request) -> Response:
         return JSONResponse(
             {"results": [line.model_dump(exclude_none=True, mode="json") for line in lines]}
         )
-    except Exception as exc:  # boundary: convert provider/parser errors to safe HTTP response
-        LOGGER.warning("OCR request failed: %s", type(exc).__name__)
+    except Exception:  # boundary: convert provider/parser errors to safe HTTP response
+        LOGGER.exception("OCR request failed")
         return JSONResponse({"error": "OCR processing failed"}, status_code=502)
-
-
-def receipt_json(record: OcrPageRecord) -> dict[str, Any]:
-    """Return non-sensitive OCR provenance metadata."""
-    return {
-        "prompt_hash": record.prompt_hash,
-        "width": record.width,
-        "height": record.height,
-        "line_count": len(record.results),
-    }

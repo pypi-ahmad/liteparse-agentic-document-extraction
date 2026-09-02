@@ -1,47 +1,37 @@
-"""Streamlit user interface for agentic document extraction."""
+"""Streamlit interface for agentic document extraction."""
 
 from __future__ import annotations
 
-import json
-from typing import Any
-
 import streamlit as st
 
+from liteparse_agentic_document_extraction.extraction import validate_user_schema
 from liteparse_agentic_document_extraction.models import (
-    BASE_DPI,
-    MODEL_ID,
-    REASONING_EFFORT,
-    REPAIR_DPI,
     DocumentArtifact,
     ProcessingOptions,
     RunStatus,
 )
 from liteparse_agentic_document_extraction.pipeline import (
-    MAX_FILES,
     artifact_json,
     process_document,
     result_zip,
     safe_stem,
-    validate_user_schema,
 )
+from liteparse_agentic_document_extraction.settings import (
+    BASE_DPI,
+    MAX_BATCH_BYTES,
+    MAX_FILES,
+    MODEL_ID,
+    REASONING_EFFORT,
+    REPAIR_DPI,
+)
+from liteparse_agentic_document_extraction.ui_support import read_schema
 
 st.set_page_config(
-    page_title="Agentic document extraction", page_icon=":material/document_scanner:", layout="wide"
+    page_title="Agentic document extraction",
+    page_icon=":material/document_scanner:",
+    layout="wide",
 )
 st.session_state.setdefault("artifacts", {})
-
-
-def read_schema(mode: str, pasted: str, uploaded: Any) -> dict[str, Any] | None:
-    """Read the selected optional JSON Schema input."""
-    if mode == "None":
-        return None
-    raw = pasted if mode == "Paste" else uploaded.getvalue().decode("utf-8") if uploaded else ""
-    if not raw.strip():
-        raise ValueError("Selected schema mode requires JSON Schema content")
-    parsed = json.loads(raw)
-    if not isinstance(parsed, dict):
-        raise ValueError("JSON Schema must be a JSON object")
-    return parsed
 
 
 with st.sidebar:
@@ -58,7 +48,8 @@ with st.sidebar:
             "Scanned PDFs or images",
             type=["pdf", "png", "jpg", "jpeg", "tif", "tiff", "webp"],
             accept_multiple_files=True,
-            help="Maximum 20 files, 50 MB each, and 100 processed pages per document.",
+            max_upload_size=50,
+            help="Maximum 20 files, 50 MB each, 500 MB per batch, and 100 pages per document.",
         )
         instructions = st.text_area(
             "Extraction instructions",
@@ -69,7 +60,7 @@ with st.sidebar:
         if schema_mode == "Paste":
             pasted_schema = st.text_area("JSON Schema", height=180)
         elif schema_mode == "Upload":
-            uploaded_schema = st.file_uploader("JSON Schema file", type=["json"])
+            uploaded_schema = st.file_uploader("JSON Schema file", type=["json"], max_upload_size=1)
 
         with st.expander("Advanced options"):
             language = st.text_input("Language hint", value="auto")
@@ -98,6 +89,8 @@ if process:
         st.error("Upload at least one document.")
     elif len(uploads) > MAX_FILES:
         st.error(f"Upload at most {MAX_FILES} files per batch.")
+    elif sum(upload.size for upload in uploads) > MAX_BATCH_BYTES:
+        st.error("Uploaded batch exceeds 500 MB.")
     else:
         try:
             schema = read_schema(schema_mode or "None", pasted_schema, uploaded_schema)
@@ -113,18 +106,17 @@ if process:
             progress = st.progress(0, text="Starting batch")
             for index, upload in enumerate(uploads, start=1):
                 with st.status(f"Processing {upload.name}", expanded=True) as status:
-                    status.write(
-                        "Parsing at 300 DPI, repairing hard regions at 400 DPI, then extracting."
-                    )
+                    status.write("Parsing at 300 DPI, repairing at 400 DPI, then extracting.")
                     artifact = process_document(upload.name, upload.getvalue(), options)
-                    st.session_state.artifacts[artifact.source_hash] = artifact
-                    if artifact.status == RunStatus.FAILED:
-                        status.update(label=f"Failed: {upload.name}", state="error")
-                        status.write(artifact.error or "Processing failed")
-                    else:
-                        status.update(label=f"Ready: {upload.name}", state="complete")
+                    st.session_state.artifacts[artifact.artifact_id] = artifact
+                    state = "error" if artifact.status is RunStatus.FAILED else "complete"
+                    status.update(
+                        label=f"{artifact.status.value.title()}: {upload.name}", state=state
+                    )
+                    if artifact.error:
+                        status.write(artifact.error)
                 progress.progress(index / len(uploads), text=f"Processed {index} of {len(uploads)}")
-        except (ValueError, json.JSONDecodeError) as exc:
+        except ValueError as exc:
             st.error(str(exc))
 
 artifacts: dict[str, DocumentArtifact] = st.session_state.artifacts
@@ -133,19 +125,14 @@ if not artifacts:
     st.stop()
 
 labels = {
-    digest: f"{artifact.source_name} · {artifact.status.value}"
-    for digest, artifact in artifacts.items()
+    artifact_id: f"{artifact.source_name} · {artifact.status.value}"
+    for artifact_id, artifact in artifacts.items()
 }
-selected_hash = st.selectbox(
-    "Document",
-    list(labels),
-    format_func=lambda digest: labels[digest],
-)
-artifact = artifacts[selected_hash]
+selected_id = st.selectbox("Document", list(labels), format_func=lambda value: labels[value])
+artifact = artifacts[selected_id]
 
-if artifact.status == RunStatus.FAILED:
-    st.error(artifact.error or "Processing failed")
-    st.stop()
+if artifact.error:
+    st.error(artifact.error)
 
 source_tab, markdown_tab, json_tab, run_tab = st.tabs(
     ["Source", "Markdown", "JSON", "Run details"], on_change="rerun"
@@ -160,32 +147,38 @@ if source_tab.open:
 
 if markdown_tab.open:
     with markdown_tab:
-        preview_tab, source_code_tab = st.tabs(["Preview", "Source"])
-        with preview_tab:
-            st.markdown(artifact.markdown)
-        with source_code_tab:
-            st.code(artifact.markdown, language="markdown", line_numbers=True)
-        st.download_button(
-            "Download Markdown",
-            artifact.markdown,
-            file_name=f"{safe_stem(artifact.source_name)}.md",
-            mime="text/markdown",
-            icon=":material/download:",
-            key=f"md-{selected_hash}",
-        )
+        if artifact.markdown:
+            preview_tab, source_code_tab = st.tabs(["Preview", "Source"])
+            with preview_tab:
+                st.markdown(artifact.markdown)
+            with source_code_tab:
+                st.code(artifact.markdown, language="markdown", line_numbers=True)
+            st.download_button(
+                "Download Markdown",
+                artifact.markdown,
+                file_name=f"{safe_stem(artifact.source_name)}.md",
+                mime="text/markdown",
+                icon=":material/download:",
+                key=f"md-{selected_id}",
+            )
+        else:
+            st.info("No Markdown was produced.")
 
 if json_tab.open:
     with json_tab:
-        serialized = artifact_json(artifact)
-        st.code(serialized, language="json", line_numbers=True)
-        st.download_button(
-            "Download JSON",
-            serialized,
-            file_name=f"{safe_stem(artifact.source_name)}.json",
-            mime="application/json",
-            icon=":material/download:",
-            key=f"json-{selected_hash}",
-        )
+        if artifact.output:
+            serialized = artifact_json(artifact)
+            st.code(serialized, language="json", line_numbers=True)
+            st.download_button(
+                "Download JSON",
+                serialized,
+                file_name=f"{safe_stem(artifact.source_name)}.json",
+                mime="application/json",
+                icon=":material/download:",
+                key=f"json-{selected_id}",
+            )
+        else:
+            st.info("No JSON result was produced.")
 
 if run_tab.open:
     with run_tab:
@@ -193,7 +186,8 @@ if run_tab.open:
         st.json(
             {
                 "status": artifact.status.value,
-                "pages": document.get("page_count"),
+                "source pages": document.get("source_page_count"),
+                "processed pages": document.get("processed_pages"),
                 "repairs": len(artifact.output.get("repairs", [])),
                 "issues": len(artifact.output.get("issues", [])),
                 "model": document.get("model"),
@@ -201,9 +195,7 @@ if run_tab.open:
             }
         )
 
-ready = [
-    item for item in artifacts.values() if item.status in {RunStatus.COMPLETE, RunStatus.PARTIAL}
-]
+ready = [item for item in artifacts.values() if item.markdown]
 if ready:
     st.download_button(
         "Download all results (.zip)",
