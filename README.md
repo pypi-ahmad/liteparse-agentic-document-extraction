@@ -2,18 +2,18 @@
 
 [![CI](https://github.com/pypi-ahmad/liteparse-agentic-document-extraction/actions/workflows/ci.yml/badge.svg)](https://github.com/pypi-ahmad/liteparse-agentic-document-extraction/actions/workflows/ci.yml)
 
-Convert scanned PDFs and images into layout-aware Markdown and evidence-grounded JSON.
-LiteParse reconstructs document structure. GPT-5.6 Terra performs OCR, identifies hard regions,
-and extracts typed fields.
+Turn scanned PDFs and images into layout-aware Markdown and evidence-grounded JSON. LiteParse
+reconstructs document structure. GPT-5.6 Terra performs OCR, identifies hard regions, and
+extracts typed fields.
 
 ## What it does
 
-- Upload PDFs or images through the local Streamlit interface.
-- OCR every page at 300 DPI and retry difficult regions at 400 DPI.
-- Preserve layout as Markdown and extract fields with optional JSON Schema.
-- Ground every non-null extracted value in quoted document lines.
-- Preview the source and results, then download Markdown, JSON, or one ZIP archive.
-- Keep uploads and results in the current application session only.
+- Upload PDF or image files through the local Streamlit interface.
+- Run OCR at 300 DPI, then retry difficult regions at 400 DPI.
+- Produce layout-aware Markdown and extract fields with an optional JSON Schema.
+- Cite document lines for every non-null extracted value.
+- Preview the source and results. Download Markdown, JSON, or a ZIP archive.
+- Keep uploads and results only for the current application session.
 
 ```mermaid
 flowchart LR
@@ -38,7 +38,7 @@ flowchart LR
 - `OPENAI_API_KEY` available to the process
 - Optional `OPENAI_BASE_URL` for the configured compatible endpoint
 
-Confirm the current PowerShell process inherited the required key without printing it:
+Check that this PowerShell process has the required key without printing it:
 
 ```powershell
 if ([string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) {
@@ -63,8 +63,8 @@ Start the app:
 uv run liteparse-ade
 ```
 
-Open <http://127.0.0.1:9578>. Alternatively, double-click `launch.cmd`; it terminates any
-existing listener on port `9578` before starting the app.
+Open <http://127.0.0.1:9578>. Or double-click `launch.cmd`. It stops any existing listener on
+port `9578` before starting the app.
 
 ## Process a document
 
@@ -77,10 +77,10 @@ existing listener on port `9578` before starting the app.
 7. Review **Source**, **Markdown**, **JSON**, and **Run details**.
 8. Download individual results or **Download all results (.zip)**.
 
-Start with the [first-document tutorial](docs/tutorials/first-document.md) or read the complete
-[documentation index](docs/README.md).
+Start with the [first-document tutorial](docs/tutorials/first-document.md). The
+[documentation index](docs/README.md) lists the rest of the guides.
 
-## Fixed processing contract
+## Fixed settings
 
 | Setting | Value |
 |---|---|
@@ -95,11 +95,11 @@ Start with the [first-document tutorial](docs/tutorials/first-document.md) or re
 | Repairs | 8 per page, 64 per document |
 | Application address | `127.0.0.1:9578` |
 
-See [configuration and limits](docs/reference/configuration.md) for the complete reference.
+See [configuration and limits](docs/reference/configuration.md) for all settings and limits.
 
 ## Outputs
 
-For each successfully parsed document, the app can produce:
+For each successfully parsed document, the app produces:
 
 - Markdown preserving headings, paragraphs, tables, and reading order where LiteParse detects
   them.
@@ -112,8 +112,8 @@ Bounding boxes use `[x1, y1, x2, y2]` in a top-left 72-DPI page viewport. See th
 
 ## Privacy and cost
 
-The app keeps uploads, OCR caches, and generated artifacts only for the active local session or
-in temporary directories. Model requests use `store=False`. The configured OpenAI endpoint still
+The app stores uploads, OCR caches, and generated artifacts only for the active local session or
+in temporary directories. Model requests use `store=False`. The configured OpenAI endpoint
 receives document images and parsed content, and processing consumes API credits. Downloaded
 files remain in the browser's download location until you delete them. **Clear session** cannot
 remove downloaded copies.
@@ -145,6 +145,6 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing code or prompts.
 - [Architecture](docs/codebase/architecture.md)
 - [Understanding LiteParse](docs/explanation/understanding-liteparse.md)
 - [Developer internals](docs/reference/python-internals.md)
-- [Research knowledge base](knowledge/index.md) (draft, unverified background research)
+- [Project knowledge base](knowledge/index.md) (draft, unverified background research)
 
 Repository: <https://github.com/pypi-ahmad/liteparse-agentic-document-extraction>
