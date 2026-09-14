@@ -89,10 +89,47 @@ def test_parse_document_without_repairs(monkeypatch: pytest.MonkeyPatch, tmp_pat
     )
     source = tmp_path / "invoice.png"
     source.write_bytes(image)
-    parsed = parse_document(source, ProcessingOptions("Extract"), None)
+    parsed = parse_document(source, ProcessingOptions("Extract", generate_annotated_pdf=True), None)
     assert parsed.markdown.startswith("# Invoice")
+    assert parsed.annotated_pdf.startswith(b"%PDF-")
     assert parsed.processed_pages == (1,)
     assert parsed.prompt_template_hashes == ("a" * 64,)
+
+
+def test_annotation_failure_preserves_markdown(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    image = png_bytes()
+    result = fake_result(image)
+
+    class FakeLiteParse:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def parse(self, _source: Any) -> SimpleNamespace:
+            return result
+
+    def fail_annotation(*_args: Any) -> bytes:
+        raise RuntimeError("render failed")
+
+    monkeypatch.setattr("liteparse_agentic_document_extraction.repair.LiteParse", FakeLiteParse)
+    monkeypatch.setattr("liteparse_agentic_document_extraction.repair._page_regions", lambda *_: [])
+    monkeypatch.setattr("liteparse_agentic_document_extraction.repair._line_catalog", lambda *_: ())
+    monkeypatch.setattr(
+        "liteparse_agentic_document_extraction.repair.REGISTRY.base_record",
+        lambda *_: record(image, []),
+    )
+    monkeypatch.setattr(
+        "liteparse_agentic_document_extraction.repair.build_annotated_pdf", fail_annotation
+    )
+
+    source = tmp_path / "invoice.png"
+    source.write_bytes(image)
+    parsed = parse_document(source, ProcessingOptions(generate_annotated_pdf=True), None)
+
+    assert parsed.markdown
+    assert parsed.annotated_pdf == b""
+    assert parsed.issues[-1].code == "annotation_failed"
 
 
 def test_parse_document_applies_400_dpi_repair(
@@ -139,6 +176,11 @@ def test_parse_document_applies_400_dpi_repair(
     parsed = parse_document(source, ProcessingOptions("Extract"), None)
     assert parsed.repairs[0].added_lines == 1
     assert any(call.get("dpi") == 400 for call in calls)
+    assert any(
+        call.get("ocr_server_headers", {}).get("X-Accuracy-Policy") == "accuracy"
+        for call in calls
+        if call.get("dpi") == 400
+    )
     assert any(call.get("ocr_server_headers", {}).get("X-OCR-Stage") == "final" for call in calls)
 
 

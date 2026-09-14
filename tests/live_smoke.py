@@ -39,7 +39,7 @@ def main() -> None:
         artifact = process_document(
             "synthetic-invoice.png",
             payload.getvalue(),
-            ProcessingOptions("Extract invoice number and total."),
+            ProcessingOptions("Extract invoice number and total.", extract_data=True),
         )
         print(
             {

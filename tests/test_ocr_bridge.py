@@ -12,7 +12,13 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from liteparse_agentic_document_extraction.models import HardRegion, OcrLine, OcrOutput, OcrStage
+from liteparse_agentic_document_extraction.models import (
+    AccuracyPolicy,
+    HardRegion,
+    OcrLine,
+    OcrOutput,
+    OcrStage,
+)
 from liteparse_agentic_document_extraction.ocr_bridge import (
     REGISTRY,
     OcrPageRecord,
@@ -82,7 +88,7 @@ def test_registry_cache_and_atomic_repair(monkeypatch: pytest.MonkeyPatch) -> No
         lambda *_args: next(calls),
     )
     assert len(registry.recognize(run_id, OcrStage.BASE, None, base_image, "auto")) == 2
-    registry.recognize(run_id, OcrStage.REPAIR, "r1", repair_image, "auto")
+    registry.recognize(run_id, OcrStage.REPAIR, "r1", repair_image, "auto", AccuracyPolicy.LEGACY)
     digest, _, _ = image_digest(base_image)
     repair = registry.repair_record(run_id, "r1")
     assert repair is not None
@@ -106,6 +112,36 @@ def test_empty_repair_preserves_base_lines() -> None:
 
     assert apply_repair(base, (10, 10, 50, 50), (0, 0, 0, 0), repair) == (0, 0)
     assert [line.text for line in base.results] == ["keep"]
+
+
+def test_accuracy_repair_uses_two_reads_and_third_only_for_disagreement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = OcrRegistry()
+    run_id = registry.start()
+    image = png_bytes()
+    values = iter(
+        [
+            record(image, [OcrLine(text="A", bbox=(1, 2, 20, 10), confidence=0.7)]),
+            record(image, [OcrLine(text="B", bbox=(1, 2, 20, 10), confidence=0.8)]),
+            record(image, [OcrLine(text="B", bbox=(1, 2, 20, 10), confidence=0.9)]),
+        ]
+    )
+    calls = 0
+
+    def fake_ocr(*_args: Any) -> OcrPageRecord:
+        nonlocal calls
+        calls += 1
+        return next(values)
+
+    monkeypatch.setattr("liteparse_agentic_document_extraction.ocr_bridge.call_terra_ocr", fake_ocr)
+    result = registry.recognize(run_id, OcrStage.REPAIR, "r1", image, "auto")
+
+    assert [item.text for item in result] == ["B"]
+    assert calls == 3
+    repair = registry.repair_record(run_id, "r1")
+    assert repair is not None
+    assert (repair.verification, repair.ocr_calls) == ("majority", 3)
 
 
 def test_ocr_endpoint_contract(monkeypatch: pytest.MonkeyPatch) -> None:

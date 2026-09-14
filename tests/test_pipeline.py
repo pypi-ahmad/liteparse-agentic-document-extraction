@@ -53,7 +53,7 @@ def strict_schema() -> dict[str, Any]:
     }
 
 
-def parsed_document(page_count: int = 1) -> ParsedDocument:
+def parsed_document(page_count: int = 1, annotated_pdf: bytes = b"") -> ParsedDocument:
     lines = tuple(
         LineEvidence(
             f"p{page}-l0001",
@@ -78,6 +78,7 @@ def parsed_document(page_count: int = 1) -> ParsedDocument:
         source_page_count=page_count,
         processed_pages=tuple(range(1, page_count + 1)),
         prompt_template_hashes=("a" * 64,),
+        annotated_pdf=annotated_pdf,
     )
 
 
@@ -271,7 +272,9 @@ def test_process_document_preserves_markdown_on_extraction_failure(
         raise RuntimeError("provider detail")
 
     monkeypatch.setattr("liteparse_agentic_document_extraction.pipeline.extract_document", fail)
-    artifact = process_document("invoice.png", png_bytes(), ProcessingOptions("Extract"))
+    artifact = process_document(
+        "invoice.png", png_bytes(), ProcessingOptions("Extract", extract_data=True)
+    )
     assert artifact.status is RunStatus.PARTIAL
     assert artifact.markdown
     assert artifact.output["stages"]["extraction"] == "failed"
@@ -279,8 +282,8 @@ def test_process_document_preserves_markdown_on_extraction_failure(
     assert artifact.error is None
 
 
-def test_process_document_complete_v2(monkeypatch: pytest.MonkeyPatch) -> None:
-    parsed = parsed_document()
+def test_process_document_complete_v22(monkeypatch: pytest.MonkeyPatch) -> None:
+    parsed = parsed_document(annotated_pdf=b"%PDF-annotated")
     extraction = ExtractionResult(
         "complete",
         {"invoice_number": "INV-1"},
@@ -294,11 +297,40 @@ def test_process_document_complete_v2(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "liteparse_agentic_document_extraction.pipeline.extract_document", lambda *_: extraction
     )
-    artifact = process_document("invoice.png", png_bytes(), ProcessingOptions("Extract"))
+    artifact = process_document(
+        "invoice.png", png_bytes(), ProcessingOptions("Extract", extract_data=True)
+    )
     assert artifact.status is RunStatus.COMPLETE
-    assert artifact.output["schema_version"] == "2.0"
+    assert artifact.output["schema_version"] == "2.2"
     assert artifact.output["evidence"][0]["sources"][0]["bbox"] == [1, 2, 30, 10]
     assert artifact.output["document"]["processed_pages"] == [1]
+    assert artifact.annotated_pdf == b"%PDF-annotated"
+
+
+def test_process_document_skips_optional_extraction(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "liteparse_agentic_document_extraction.pipeline.parse_document",
+        lambda *_: parsed_document(),
+    )
+
+    def unexpected_extraction(*_args: Any) -> None:
+        raise AssertionError("extraction should be skipped")
+
+    monkeypatch.setattr(
+        "liteparse_agentic_document_extraction.pipeline.extract_document", unexpected_extraction
+    )
+    artifact = process_document(
+        "invoice.png",
+        png_bytes(),
+        ProcessingOptions(schema={"invalid": "ignored"}),
+    )
+
+    assert artifact.status is RunStatus.COMPLETE
+    assert artifact.output["schema_version"] == "2.2"
+    assert artifact.output["stages"]["extraction"] == "skipped"
+    assert artifact.output["stages"]["annotation"] == "skipped"
+    assert artifact.output["data"] is None
+    assert artifact.output["evidence"] == []
 
 
 def test_process_document_input_failure() -> None:
@@ -319,11 +351,13 @@ def test_artifact_exports_use_unique_names() -> None:
         )
         for index in range(1, 4)
     ]
+    artifacts[0].annotated_pdf = b"%PDF-annotated"
     assert json.loads(artifact_json(artifacts[0]))["status"] == "complete"
     with zipfile.ZipFile(io.BytesIO(result_zip(artifacts))) as archive:
         assert archive.namelist() == [
             "Invoice_1.md",
             "Invoice_1.json",
+            "Invoice_1.annotated.pdf",
             "Invoice_1-2.md",
             "Invoice_1-2.json",
             "Invoice_1-3.md",
