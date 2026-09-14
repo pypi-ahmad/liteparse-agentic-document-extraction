@@ -82,8 +82,19 @@ a page error, an extraction chunk failure, or evidence that remained invalid aft
 
 ## Markdown exists but JSON data is missing
 
-Parsing and extraction fail independently. The app deliberately preserves Markdown when Terra
-extraction fails. Refine the instructions or schema, process fewer pages, and try again.
+Check `stages.extraction`. A value of `skipped` means structured extraction was off; enable
+**Extract structured data** and process the document again if you need fields. A value of
+`failed` means extraction was requested but failed. The app preserves Markdown in both cases.
+For a failed extraction, refine the instructions or schema, process fewer pages, and try again.
+
+## Saved history is unavailable
+
+History requires a writable `%LOCALAPPDATA%` directory. The app reports a safe warning and keeps
+new results in the current session when SQLite cannot be opened or written. Check available disk
+space and the permissions on `%LOCALAPPDATA%\LiteParseAgenticDocumentExtraction`.
+
+The database is plaintext. Do not copy it into a public issue. Deleting a history record cannot
+remove copies already downloaded through the browser.
 
 ## The live smoke test fails
 

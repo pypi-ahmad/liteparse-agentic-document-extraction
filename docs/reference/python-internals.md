@@ -10,13 +10,15 @@ contributors and tests and may change without a compatibility release.
 |---|---|
 | `server` | Compose the Streamlit script and private Starlette OCR route. |
 | `ui` | Render upload, options, previews, and downloads. |
-| `pipeline` | Validate uploads and coordinate parsing, extraction, and export. |
+| `pipeline` | Validate uploads and coordinate parsing, optional extraction, and export. |
 | `repair` | Run LiteParse and apply bounded 400-DPI hard-region repair. |
+| `annotations` | Render optional 300-DPI PDFs with color-coded line boxes. |
 | `ocr_bridge` | Validate private OCR requests, call Terra, and cache run-scoped OCR. |
 | `extraction` | Validate schemas, chunk documents, call Terra, ground evidence, and merge. |
 | `models` | Define application records and structured OCR response models. |
 | `settings` | Hold fixed resource and model settings. |
 | `prompts` | Load packaged Markdown templates and substitute placeholders once. |
+| `storage` | Persist derived artifacts in bounded, expiring SQLite history. |
 
 ## Coordinator interfaces
 
@@ -27,6 +29,17 @@ contributors and tests and may change without a compatibility release.
 | `parse_target_pages` | Range string or `None` | Returns sorted page numbers or raises `ValueError`. |
 | `artifact_json` | `DocumentArtifact` | Returns indented UTF-8 JSON text. |
 | `result_zip` | Iterable of artifacts | Returns ZIP bytes with collision-safe filenames. |
+
+## History interfaces
+
+| Callable or class | Purpose |
+|---|---|
+| `HistoryStore` | Own the SQLite path, schema, retention, capacity, and record operations. |
+| `HistoryStore.save` | Store derived output and options without source bytes. |
+| `HistoryStore.list_recent` | Return bounded newest-first metadata for the UI. |
+| `HistoryStore.load` | Restore an artifact with `source_bytes=b""`. |
+| `HistoryStore.delete` | Delete one record by generated artifact ID. |
+| `default_database_path` | Resolve the per-user `%LOCALAPPDATA%` database path. |
 
 ## Extraction interfaces
 
@@ -66,7 +79,7 @@ content length, run ID, stage, and image body for LiteParse's private callback.
 | `OcrLine` | Validated text, box, confidence, and optional polygon. |
 | `HardRegion` | Validated box and reason requesting targeted repair. |
 | `OcrOutput` | Terra structured OCR response containing lines and regions. |
-| `ProcessingOptions` | Instructions, schema, language, pages, repeated elements, and image mode. |
+| `ProcessingOptions` | Extraction flag, instructions, schema, language, pages, repeated elements, and image mode. |
 | `ProcessingIssue` | Stage failure with optional page, box, and data path. |
 | `LineEvidence` | Stable line ID, page, text, box, OCR source, and confidence. |
 | `RepairReceipt` | Applied region, reason, and replaced/added counts. |

@@ -1,7 +1,7 @@
 # Tutorial: process your first scanned document
 
-This tutorial shows how to turn one scanned invoice into Markdown and structured JSON, starting
-from a clean checkout.
+This tutorial shows how to turn one scanned invoice into Markdown, then optionally extract
+structured JSON, starting from a clean checkout.
 
 **Time:** about 10 minutes, plus model processing time  
 **Level:** beginner
@@ -37,32 +37,37 @@ uv run liteparse-ade
 
 Open <http://127.0.0.1:9578>. Keep the PowerShell window open while using the app.
 
-## 3. Configure the extraction
+## 3. Parse the document
 
 In the left sidebar:
 
-1. Leave **Extraction schema** set to **None**.
+1. Leave **Extract structured data** off.
 2. Upload one scanned invoice.
-3. Enter this instruction:
+3. Leave the advanced defaults unchanged.
+4. Select **Process files**.
 
-   ```text
-   Extract the invoice number, supplier, invoice date, currency, and total.
-   ```
+The app renders at 300 DPI, retries hard regions at 400 DPI, and reconstructs Markdown. The JSON
+artifact records `extraction` as `skipped`, with `data: null` and an empty evidence list.
 
-4. Leave the advanced defaults unchanged.
-5. Select **Process files**.
+## 4. Inspect the Markdown
 
-The app renders at 300 DPI, retries hard regions at 400 DPI, reconstructs Markdown, and asks
-Terra for evidence-grounded fields.
-
-## 4. Inspect the result
-
-Use the four result tabs:
+Use the result tabs:
 
 - **Source** confirms that the correct document was processed.
 - **Markdown** shows the reconstructed document and its raw Markdown source.
-- **JSON** shows extracted fields, evidence, repairs, and issues.
+- **JSON** shows stage status, repairs, issues, and optional extracted data.
 - **Run details** summarizes pages, status, model, and repair count.
+
+## 5. Optionally extract structured data
+
+To extract fields, enable **Extract structured data**, upload the invoice again, and enter:
+
+```text
+Extract the invoice number, supplier, invoice date, currency, and total.
+```
+
+Leave **Extraction schema** set to **None**, then select **Process files**. The app parses the
+document first and asks Terra for evidence-grounded fields only after Markdown is available.
 
 A successful synthetic result looks like this:
 
@@ -84,12 +89,15 @@ A successful synthetic result looks like this:
 }
 ```
 
-Each non-null value has an evidence entry containing an exact quote and source line IDs.
+Each non-null document value has an evidence entry containing an exact quote and source line
+IDs. In the built-in schema, this applies to `document_type` and each `fields/*/value`;
+`fields/*/name` and `fields/*/value_type` are structural metadata and need no evidence.
 
-## 5. Download the outputs
+## 6. Download or reopen the outputs
 
 Download the Markdown and JSON individually, or select **Download all results (.zip)**. The
-ZIP contains one `.md` and one `.json` file per usable upload.
+ZIP contains one `.md` and one `.json` file per usable upload. Derived results also appear under
+**Saved history** for 30 days. Loading a saved result does not rerun OCR or extraction.
 
 ## Checkpoint
 
@@ -97,8 +105,9 @@ You are done when:
 
 - the run status is `complete` or `partial`;
 - Markdown is nonempty;
-- the requested values appear under `data`; and
-- every non-null value has evidence.
+- parsing-only JSON reports extraction as `skipped`; and
+- if extraction was enabled, requested document values appear under `data` with evidence;
+  built-in field names and value-type labels need no separate evidence.
 
 Next, learn how to [process batches](../how-to/process-documents.md) or
 [define a custom schema](../how-to/use-a-custom-schema.md).

@@ -15,7 +15,7 @@ Use this page to choose the shortest path to your goal. The documentation follow
 
 | Goal | Document |
 |---|---|
-| Complete one guided extraction | [First document](tutorials/first-document.md) |
+| Complete one guided parse and optional extraction | [First document](tutorials/first-document.md) |
 
 ## How-to guides
 
@@ -23,6 +23,7 @@ Use this page to choose the shortest path to your goal. The documentation follow
 |---|---|
 | Install, start, and stop the app | [Run the app](how-to/run-the-app.md) |
 | Upload files, select pages, and download results | [Process documents](how-to/process-documents.md) |
+| Compare OCR policies against the fixed reference suite | [Evaluate accuracy](how-to/evaluate-accuracy.md) |
 | Extract data into a defined shape | [Use a custom schema](how-to/use-a-custom-schema.md) |
 | Resolve common startup and processing failures | [Troubleshooting](how-to/troubleshooting.md) |
 
@@ -31,7 +32,7 @@ Use this page to choose the shortest path to your goal. The documentation follow
 | Lookup | Document |
 |---|---|
 | Environment, fixed settings, formats, and limits | [Configuration](reference/configuration.md) |
-| JSON schema v2, evidence, statuses, repairs, and issues | [Output JSON](reference/output-json.md) |
+| JSON schema v2.2, evidence, statuses, repairs, and issues | [Output JSON](reference/output-json.md) |
 | Modules, types, and internal callables | [Python internals](reference/python-internals.md) |
 
 ## Explanation and operations

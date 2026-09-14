@@ -39,7 +39,8 @@ Double-click `launch.cmd`, or run:
 .\launch.cmd
 ```
 
-The launcher forcibly terminates any process listening on port `9578`, then starts the app.
+The launcher forcibly terminates any process listening on port `9578`, then starts the app. The
+same terminal displays live INFO logs and remains open after the app exits so errors stay visible.
 Save unrelated work before using it if another service may own that port.
 
 ## Use another port

@@ -2,18 +2,19 @@
 
 [![CI](https://github.com/pypi-ahmad/liteparse-agentic-document-extraction/actions/workflows/ci.yml/badge.svg)](https://github.com/pypi-ahmad/liteparse-agentic-document-extraction/actions/workflows/ci.yml)
 
-Turn scanned PDFs and images into layout-aware Markdown and evidence-grounded JSON. LiteParse
-reconstructs document structure. GPT-5.6 Terra performs OCR, identifies hard regions, and
-extracts typed fields.
+Turn scanned PDFs and images into layout-aware Markdown. LiteParse reconstructs document
+structure, while GPT-5.6 Terra performs OCR and identifies hard regions. Structured extraction
+is optional.
 
 ## What it does
 
 - Upload PDF or image files through the local Streamlit interface.
-- Run OCR at 300 DPI, then retry difficult regions at 400 DPI.
-- Produce layout-aware Markdown and extract fields with an optional JSON Schema.
-- Cite document lines for every non-null extracted value.
-- Preview the source and results. Download Markdown, JSON, or a ZIP archive.
-- Keep uploads and results only for the current application session.
+- Run OCR at 300 DPI, then verify difficult 400-DPI regions with two independent Terra reads.
+- Produce layout-aware Markdown before any optional field extraction.
+- Enable structured extraction when you need evidence-grounded JSON.
+- Optionally generate, preview, and download a 300-DPI PDF with color-coded line annotations.
+- Preview the source and results. Download Markdown, JSON, annotated PDF, or a ZIP archive.
+- Keep source uploads in the current session and derived results in 30-day local history.
 
 ```mermaid
 flowchart LR
@@ -23,9 +24,13 @@ flowchart LR
     D -->|Yes| E[Repair at 400 DPI]
     D -->|No| F[Layout-aware Markdown]
     E --> F
-    F --> G[Terra schema extraction]
-    G --> H[Evidence validation]
-    H --> I[Markdown + JSON + ZIP]
+    F --> G{Extraction enabled?}
+    G -->|Yes| H[Terra schema extraction]
+    H --> I[Evidence validation]
+    G -->|No| J[Parsing-only JSON]
+    I --> K[Markdown + JSON + ZIP]
+    J --> K
+    K --> L[30-day SQLite history]
 ```
 
 ## Quick start
@@ -70,12 +75,12 @@ port `9578` before starting the app.
 
 1. Open **Process documents** in the left sidebar.
 2. Upload PDF, PNG, JPEG, TIFF, or WebP files.
-3. Describe the fields you want under **Extraction instructions**.
-4. Optionally paste or upload a strict JSON Schema.
-5. Optionally choose **All** pages or an inclusive **Start page** and **End page** range.
-6. Select **Process files**.
-7. Review **Source**, **Markdown**, **JSON**, and **Run details**.
-8. Download individual results or **Download all results (.zip)**.
+3. Optionally choose **All** pages or an inclusive **Start page** and **End page** range.
+4. Leave **Extract structured data** off for Markdown only. Enable it to provide extraction
+   instructions and an optional strict JSON Schema.
+5. Select **Process files**.
+6. Review **Source**, **Annotated PDF**, **Markdown**, **JSON**, and **Run details**.
+7. Download individual results or **Download all results (.zip)**.
 
 Start with the [first-document tutorial](docs/tutorials/first-document.md). The
 [documentation index](docs/README.md) lists the rest of the guides.
@@ -93,6 +98,11 @@ Start with the [first-document tutorial](docs/tutorials/first-document.md). The
 | Batch size | 500 MB maximum |
 | Pages | 100 processed pages per document |
 | Repairs | 8 per page, 64 per document |
+| Structured extraction | Off by default |
+| Accuracy policy | Two-read consensus; third read only on disagreement |
+| Experimental peer evidence | Off by default |
+| Annotated PDF | Optional, off by default |
+| Saved history | 30 days, 1 GiB retained-output cap |
 | Application address | `127.0.0.1:9578` |
 
 See [configuration and limits](docs/reference/configuration.md) for all settings and limits.
@@ -103,20 +113,28 @@ For each successfully parsed document, the app produces:
 
 - Markdown preserving headings, paragraphs, tables, and reading order where LiteParse detects
   them.
-- JSON schema version `2.0` containing status, stage outcomes, metadata, extracted data,
+- JSON schema version `2.2` containing status, stage outcomes, metadata, optional extracted data,
   evidence, repairs, and issues.
-- A ZIP containing collision-safe `.md` and `.json` pairs for all usable documents.
+- An optional 300-DPI annotated PDF with blue native-text boxes, green 300-DPI OCR boxes, and red
+  400-DPI repair boxes.
+- A ZIP containing collision-safe `.md` and `.json` pairs plus generated annotated PDFs.
 
 Bounding boxes use `[x1, y1, x2, y2]` in a top-left 72-DPI page viewport. See the
 [output JSON reference](docs/reference/output-json.md).
 
 ## Privacy and cost
 
-The app stores uploads, OCR caches, and generated artifacts only for the active local session or
-in temporary directories. Model requests use `store=False`. The configured OpenAI endpoint
-receives document images and parsed content, and processing consumes API credits. Downloaded
-files remain in the browser's download location until you delete them. **Clear session** cannot
-remove downloaded copies.
+Source uploads and OCR images exist only in memory or temporary directories during the active
+session. The app saves derived Markdown, JSON, processing options, filenames, and source hashes
+for 30 days in `%LOCALAPPDATA%\LiteParseAgenticDocumentExtraction\history.sqlite3`. It never
+saves the original PDF or image bytes in SQLite. The database is plaintext and depends on your
+Windows account and device encryption for protection.
+
+Annotated PDFs remain in the active session and ZIP download; saved history does not retain them.
+
+Model requests use `store=False`. The configured OpenAI endpoint receives document images and,
+when extraction is enabled, parsed content. Processing consumes API credits. **Clear session**
+does not erase saved history or files already downloaded through the browser.
 
 ## Development
 
@@ -133,6 +151,16 @@ The test suite enforces at least 90% coverage. The optional live check consumes 
 ```powershell
 uv run python tests/live_smoke.py
 ```
+
+Run the fixed 14-page A/B suite against local LandingAI ADE references:
+
+```powershell
+uv run liteparse-ade-eval `
+  --corpus-root "D:\AI\Github\OpenAI-Agentic-Document_extraction\data" `
+  --acknowledge-sensitive-output
+```
+
+The evaluator writes ignored, potentially sensitive artifacts under `evaluation/runs/`.
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before changing code or prompts.
 

@@ -6,11 +6,13 @@ and escalates bounded hard regions to 400 DPI.
 
 ## Candidate sources
 
-Two signals create repair candidates:
+Four signals create repair candidates in accuracy mode:
 
 - Terra returns `hard_regions` with pixel bounding boxes and a short reason.
 - LiteParse emits a `grid_fallback` block for a table-like region it could not reconstruct
   normally.
+- Terra assigns a line confidence below `0.90`.
+- OCR text contains a conservative anomaly marker or damaged-character pattern.
 
 Candidates are clamped to the page, merged when overlapping, padded for context, and limited
 to 8 per page and 64 per document. Skipped candidates become explicit repair-budget issues.
@@ -21,7 +23,12 @@ The 400-DPI crop has its own pixel coordinate system. Repair lines and optional 
 mapped back into the full 300-DPI page. A line is accepted only when its center lies inside the
 target region.
 
-The replacement is atomic:
+Accuracy mode reads every 400-DPI crop twice independently. Matching text and overlapping boxes
+form consensus. A third read is made only when the first two disagree, and every accepted line
+must then have a two-of-three majority. If any line remains unresolved, the entire repair is
+rejected and the original 300-DPI region is kept.
+
+The accepted replacement is atomic:
 
 1. Map and validate all repair lines without changing the base record.
 2. If no valid line remains, return failure and preserve every base line.
@@ -29,14 +36,18 @@ The replacement is atomic:
 4. Insert the mapped repair lines in reading order.
 5. Record their fingerprints so exported evidence can report `repair_400` provenance.
 
-A valid nonempty 400-DPI repair replaces the region even if its confidence is lower than the
-300-DPI line. Resolution and targeted context make the repair pass authoritative; confidence
-remains available for downstream review.
+Legacy mode retains the former single-read behavior for controlled A/B evaluation. Accuracy mode
+is the application default.
+
+Experimental peer evidence can provide a clearer repeated instance from another page to the
+repair call. It is off by default and only considers repeated printed text that excludes digits
+and checkbox-like markers; at least three page occurrences are required.
 
 ## Recovery
 
 Individual repair exceptions are contained and logged. The user receives a bounded
-`repair_failed` issue stating that 300-DPI content was retained. If the final parse against the
+`repair_failed` issue stating that 300-DPI content was retained. Consensus rejection instead
+records `repair_disagreement`. If the final parse against the
 repaired cache fails, the pipeline clears repair receipts, records `final_parse_failed`, and
 returns base Markdown.
 

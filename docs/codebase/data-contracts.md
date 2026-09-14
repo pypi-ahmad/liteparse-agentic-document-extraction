@@ -37,12 +37,16 @@ must occur after whitespace normalization and case folding.
 
 | Status | Meaning |
 |---|---|
-| `complete` | Markdown and extraction are usable with no recorded issue. |
+| `complete` | Markdown is usable, optional extraction completed or was skipped, and no issue exists. |
 | `partial` | Usable output exists, but at least one stage degraded. |
 | `failed` | Parsing produced no usable Markdown. |
 
 The `stages` object explains whether degradation originated in parsing, repair, or extraction.
 Consumers should inspect both overall status and issues instead of treating any JSON file as a
 guarantee of complete extraction.
+
+Version 2.2 retains `stages.extraction: "skipped"` for parsing-only runs and adds the selected
+accuracy policy plus repair verification metadata. These records keep
+`data: null` and `evidence: []` rather than introducing a second output shape.
 
 See the [output JSON reference](../reference/output-json.md) for field-level details.

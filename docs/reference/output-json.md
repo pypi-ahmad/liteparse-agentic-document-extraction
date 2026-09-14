@@ -1,6 +1,6 @@
 # Output JSON reference
 
-Every processed artifact uses `schema_version` `2.0`.
+Every processed artifact uses `schema_version` `2.2`.
 
 ## Top-level fields
 
@@ -8,7 +8,7 @@ Every processed artifact uses `schema_version` `2.0`.
 |---|---|
 | `schema_version` | Output contract version. |
 | `status` | Overall `complete`, `partial`, or `failed` state. |
-| `stages` | Separate parsing, repair, and extraction outcomes. |
+| `stages` | Separate parsing, repair, annotation, and extraction outcomes. |
 | `document` | Source identity, pages, versions, model, DPI, and prompt hashes. |
 | `data` | Generic or user-schema extraction result; may be `null`. |
 | `evidence` | Grounding for non-null extracted leaves. |
@@ -17,12 +17,18 @@ Every processed artifact uses `schema_version` `2.0`.
 
 ## Status invariants
 
-- `complete`: usable Markdown, extraction is complete, and no issue exists.
+- `complete`: usable Markdown exists, requested extraction completed or was skipped, and no
+  issue exists.
 - `partial`: usable Markdown or data remains, but extraction or another stage has issues.
 - `failed`: no usable Markdown was produced.
 
 Extraction model responses use a stricter internal invariant: `failed` requires `data: null` and
 at least one issue; `partial` requires usable data and at least one issue.
+
+`stages.extraction` is `skipped` when **Extract structured data** is off. Parsing-only results
+still include `data: null` and `evidence: []`, so all version 2.2 artifacts share one shape.
+`stages.annotation` is `complete`, `failed`, or `skipped` according to the optional annotated-PDF
+stage.
 
 ## Evidence
 
@@ -54,11 +60,12 @@ fields. Issue messages are bounded and avoid exposing provider exception details
 
 ```json
 {
-  "schema_version": "2.0",
+  "schema_version": "2.2",
   "status": "complete",
   "stages": {
     "parsing": "complete",
     "repair": "complete",
+    "annotation": "skipped",
     "extraction": "complete"
   },
   "document": {

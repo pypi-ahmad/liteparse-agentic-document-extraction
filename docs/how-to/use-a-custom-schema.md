@@ -1,7 +1,8 @@
 # How to use a custom extraction schema
 
-A custom JSON Schema makes the `data` object predictable for downstream systems. Select
-**Paste** or **Upload** under **Extraction schema**, then provide a schema no larger than 100 KB.
+A custom JSON Schema makes the `data` object predictable for downstream systems. Enable
+**Extract structured data**, select **Paste** or **Upload** under **Extraction schema**, then
+provide a schema no larger than 100 KB.
 
 ## Start with a strict object schema
 

@@ -1,7 +1,8 @@
 # Evidence-grounded extraction
 
-Extraction converts parsed content into either the built-in field-list schema or a strict schema
-supplied by the user. Model output is accepted only after local structural and evidence checks.
+When enabled, extraction converts parsed content into either the built-in field-list schema or a
+strict schema supplied by the user. Model output is accepted only after local structural and
+evidence checks. Parsing-only runs do not call this module.
 
 ## Chunking
 
