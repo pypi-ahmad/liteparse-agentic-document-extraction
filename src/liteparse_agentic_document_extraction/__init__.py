@@ -1,4 +1,8 @@
-"""LiteParse agentic document extraction application."""
+"""LiteParse agentic document extraction application.
+
+Package entry point only; see server.py for the actual ASGI app and ui.py
+for the Streamlit interface it runs.
+"""
 
 
 def main() -> None:

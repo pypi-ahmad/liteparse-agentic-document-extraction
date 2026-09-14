@@ -1,4 +1,13 @@
-"""Local LiteParse HTTP OCR bridge backed by GPT-5.6 Terra."""
+"""Local LiteParse HTTP OCR bridge backed by GPT-5.6 Terra.
+
+LiteParse (an external library) calls back into this app's own loopback HTTP
+endpoint (ocr_endpoint) to get OCR for each rendered page, rather than this
+app calling LiteParse's OCR hooks directly in-process. OcrRegistry is the
+per-run state that makes that indirection safe: it isolates concurrent
+documents from each other and caches by image content so the same rendered
+page is never billed to Terra twice. Next: repair.py, the only caller of
+OcrRegistry.recognize.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +19,7 @@ import uuid
 from dataclasses import dataclass, field
 from functools import lru_cache
 from hashlib import sha256
+from typing import Any
 
 from openai import OpenAI
 from PIL import Image
@@ -18,7 +28,8 @@ from starlette.datastructures import UploadFile
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from .models import HardRegion, OcrLine, OcrOutput, OcrStage
+from .consensus import resolve_ocr_reads
+from .models import AccuracyPolicy, HardRegion, OcrLine, OcrOutput, OcrStage
 from .prompts import load_prompt
 from .settings import (
     MAX_RENDERED_PIXELS,
@@ -43,6 +54,8 @@ class OcrPageRecord:
     prompt_hashes: tuple[str, ...]
     region_id: str | None = None
     repaired_fingerprints: set[tuple[str, float, float, float, float]] = field(default_factory=set)
+    verification: str = "legacy"
+    ocr_calls: int = 1
 
 
 @dataclass(slots=True)
@@ -51,6 +64,7 @@ class RunCache:
 
     base: dict[str, OcrPageRecord] = field(default_factory=dict)
     repairs: dict[str, OcrPageRecord] = field(default_factory=dict)
+    peers: dict[str, bytes] = field(default_factory=dict)
 
 
 @lru_cache(maxsize=1)
@@ -60,7 +74,12 @@ def get_openai_client() -> OpenAI:
 
 
 def image_digest(image_bytes: bytes) -> tuple[str, int, int]:
-    """Hash decoded pixels so equivalent PNG encodings share a cache key."""
+    """Hash decoded pixels so equivalent PNG encodings share a cache key.
+
+    Also the single enforcement point for MAX_RENDERED_PIXELS: every caller
+    that needs a cache key gets the size check for free, so there is no
+    separate "validate this image" step elsewhere in the pipeline.
+    """
     with Image.open(io.BytesIO(image_bytes)) as image:
         width, height = image.size
         if width * height > MAX_RENDERED_PIXELS:
@@ -71,7 +90,13 @@ def image_digest(image_bytes: bytes) -> tuple[str, int, int]:
 
 
 def _bounded_output(output: OcrOutput, width: int, height: int) -> OcrOutput:
-    """Discard invalid model geometry before LiteParse consumes it."""
+    """Discard invalid model geometry before LiteParse consumes it.
+
+    Trust boundary: Terra's returned bboxes/polygons are untrusted model
+    output and are clamped to the image bounds here before anything
+    downstream (repair coordinate mapping, annotated PDF drawing, evidence
+    citations) does arithmetic on them.
+    """
     lines: list[OcrLine] = []
     for line in output.results:
         x1, y1, x2, y2 = line.bbox
@@ -103,34 +128,61 @@ def _bounded_output(output: OcrOutput, width: int, height: int) -> OcrOutput:
     return OcrOutput(results=lines, hard_regions=regions)
 
 
-def call_terra_ocr(image_bytes: bytes, language: str, width: int, height: int) -> OcrPageRecord:
-    """OCR and inspect one page image with Terra."""
+def call_terra_ocr(
+    image_bytes: bytes,
+    language: str,
+    width: int,
+    height: int,
+    peer_image_bytes: bytes | None = None,
+) -> OcrPageRecord:
+    """OCR and inspect one page image with Terra.
+
+    peer_image_bytes, when given, is attached as a *second* input image in
+    the same request (see prompts/ocr-peer-user.md) - extra visual context
+    for one call, not a second independent read. That is a distinct mechanism
+    from the repeated-call voting in OcrRegistry.recognize below; the two
+    should not be confused.
+    """
     developer_prompt, developer_hash = load_prompt("ocr-developer.md")
     user_prompt, user_hash = load_prompt(
         "ocr-user.md", LANGUAGE=language or "auto", WIDTH=str(width), HEIGHT=str(height)
     )
     encoded = base64.b64encode(image_bytes).decode("ascii")
+    user_content: list[dict[str, Any]] = [
+        {"type": "input_text", "text": user_prompt},
+        {
+            "type": "input_image",
+            "image_url": f"data:image/png;base64,{encoded}",
+            "detail": "original",
+        },
+    ]
+    prompt_hashes = [developer_hash, user_hash]
+    if peer_image_bytes:
+        peer_prompt, peer_hash = load_prompt("ocr-peer-user.md")
+        user_content.extend(
+            [
+                {"type": "input_text", "text": peer_prompt},
+                {
+                    "type": "input_image",
+                    "image_url": "data:image/png;base64,"
+                    + base64.b64encode(peer_image_bytes).decode("ascii"),
+                    "detail": "original",
+                },
+            ]
+        )
+        prompt_hashes.append(peer_hash)
+    request_input: Any = [
+        {
+            "role": "developer",
+            "content": [{"type": "input_text", "text": developer_prompt}],
+        },
+        {"role": "user", "content": user_content},
+    ]
     response = get_openai_client().responses.parse(
         model=MODEL_ID,
         reasoning={"effort": REASONING_EFFORT},
         store=False,
-        input=[
-            {
-                "role": "developer",
-                "content": [{"type": "input_text", "text": developer_prompt}],
-            },
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": user_prompt},
-                    {
-                        "type": "input_image",
-                        "image_url": f"data:image/png;base64,{encoded}",
-                        "detail": "original",
-                    },
-                ],
-            },
-        ],
+        input=request_input,
         text_format=OcrOutput,
     )
     if response.output_parsed is None:
@@ -143,7 +195,7 @@ def call_terra_ocr(image_bytes: bytes, language: str, width: int, height: int) -
         height=height,
         results=output.results,
         hard_regions=output.hard_regions,
-        prompt_hashes=(developer_hash, user_hash),
+        prompt_hashes=tuple(prompt_hashes),
     )
 
 
@@ -171,6 +223,14 @@ class OcrRegistry:
         with self._lock:
             return run_id in self._runs
 
+    def set_peer(self, run_id: str, region_id: str, image_bytes: bytes) -> None:
+        """Attach optional document-local visual evidence to one repair region."""
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run is None:
+                raise PermissionError("inactive OCR run")
+            run.peers[region_id] = image_bytes
+
     def recognize(
         self,
         run_id: str,
@@ -178,8 +238,19 @@ class OcrRegistry:
         region_id: str | None,
         image_bytes: bytes,
         language: str,
+        accuracy_policy: AccuracyPolicy = AccuracyPolicy.ACCURACY,
     ) -> list[OcrLine]:
-        """Return cached OCR or call Terra, recording base and repair results."""
+        """Return cached OCR or call Terra, recording base and repair results.
+
+        BASE/FINAL results are cached by pixel digest (the same rendered page
+        can be OCR'd twice, e.g. once at BASE and again at FINAL after other
+        pages were repaired); REPAIR results are cached by region_id instead,
+        since each repair crop is unique. The lock is released before the
+        (slow, network-bound) Terra calls and re-acquired after, so one
+        run's repair does not block other concurrent runs; the run-existence
+        check is repeated after re-acquiring in case the run finished while
+        this call was in flight.
+        """
         digest, width, height = image_digest(image_bytes)
         with self._lock:
             run = self._runs.get(run_id)
@@ -189,8 +260,21 @@ class OcrRegistry:
                 return list(run.base[digest].results)
             if stage is OcrStage.REPAIR and region_id and region_id in run.repairs:
                 return list(run.repairs[region_id].results)
+            peer_image = run.peers.get(region_id, b"") if region_id else b""
 
-        record = call_terra_ocr(image_bytes, language, width, height)
+        record = call_terra_ocr(image_bytes, language, width, height, peer_image or None)
+        # Repeated-read voting only applies to repairs under the accuracy
+        # policy: two independent Terra calls, with a third tie-breaking read
+        # only if the first two disagree (see consensus.resolve_ocr_reads).
+        if stage is OcrStage.REPAIR and accuracy_policy is AccuracyPolicy.ACCURACY:
+            second = call_terra_ocr(image_bytes, language, width, height, peer_image or None)
+            consensus = resolve_ocr_reads(record.results, second.results)
+            if not consensus.accepted:
+                third = call_terra_ocr(image_bytes, language, width, height, peer_image or None)
+                consensus = resolve_ocr_reads(record.results, second.results, third.results)
+            record.results = list(consensus.lines)
+            record.verification = consensus.status
+            record.ocr_calls = consensus.calls
         record.region_id = region_id
         with self._lock:
             run = self._runs.get(run_id)
@@ -219,7 +303,14 @@ REGISTRY = OcrRegistry()
 
 
 async def ocr_endpoint(request: Request) -> Response:
-    """Serve LiteParse's multipart OCR contract on loopback only."""
+    """Serve LiteParse's multipart OCR contract on loopback only.
+
+    Security boundary: this route is mounted on the same ASGI app as the
+    public Streamlit UI, so the loopback check below is what keeps it from
+    being a general-purpose OCR proxy for anyone who can reach the app.
+    run_id doubles as a capability token - an unguessable UUID minted by
+    OcrRegistry.start - not a user identity.
+    """
     client_host = request.client.host if request.client else ""
     if client_host not in {"127.0.0.1", "::1"}:
         return JSONResponse({"error": "OCR endpoint is local only"}, status_code=403)
@@ -245,11 +336,32 @@ async def ocr_endpoint(request: Request) -> Response:
         except ValueError:
             return JSONResponse({"error": "invalid OCR stage"}, status_code=400)
         region_id = request.headers.get("x-region-id")
+        try:
+            accuracy_policy = AccuracyPolicy(
+                request.headers.get("x-accuracy-policy", AccuracyPolicy.ACCURACY)
+            )
+        except ValueError:
+            return JSONResponse({"error": "invalid accuracy policy"}, status_code=400)
         lines = await run_in_threadpool(
-            REGISTRY.recognize, run_id, stage, region_id, image_bytes, language
+            REGISTRY.recognize,
+            run_id,
+            stage,
+            region_id,
+            image_bytes,
+            language,
+            accuracy_policy,
         )
         return JSONResponse(
-            {"results": [line.model_dump(exclude_none=True, mode="json") for line in lines]}
+            {
+                "results": [
+                    line.model_dump(
+                        include={"text", "bbox", "confidence", "polygon"},
+                        exclude_none=True,
+                        mode="json",
+                    )
+                    for line in lines
+                ]
+            }
         )
     except Exception:  # boundary: convert provider/parser errors to safe HTTP response
         LOGGER.exception("OCR request failed")

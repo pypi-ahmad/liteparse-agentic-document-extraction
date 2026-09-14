@@ -1,4 +1,11 @@
-"""Deep Terra extraction module: chunking, schemas, evidence, retries, and merge."""
+"""Deep Terra extraction module: chunking, schemas, evidence, retries, and merge.
+
+The load-bearing invariant of this module is validate_extraction: every
+non-null value the model returns in "data" must be backed by an "evidence"
+entry whose quote is a verbatim substring of cited, pre-existing
+LineEvidence text. That is what makes extraction "grounded" rather than a
+plain LLM answer. Next: pipeline.py's process_document, the only caller.
+"""
 
 from __future__ import annotations
 
@@ -28,6 +35,9 @@ from .settings import (
     REASONING_EFFORT,
 )
 
+# Fixed vocabulary baked into extraction_schema()'s strict enum; the model can
+# only ever emit one of these codes, so adding a new one requires updating
+# both this list and any prompt text that explains the codes to the model.
 MODEL_ISSUE_CODES = ["missing", "ambiguous", "conflicting", "illegible", "unsupported"]
 
 
@@ -41,7 +51,13 @@ class ExtractionChunk:
 
 
 def validate_user_schema(schema: dict[str, Any] | None) -> None:
-    """Validate the supported strict Structured Outputs schema subset."""
+    """Validate the supported strict Structured Outputs schema subset.
+
+    These restrictions (no $ref, additionalProperties: false, every property
+    required) are not house style; they are the OpenAI Structured Outputs
+    "strict" mode requirements. An optional field must be modeled as a
+    required, nullable property instead of an absent one.
+    """
     if schema is None:
         return
     if len(json.dumps(schema).encode()) > MAX_SCHEMA_BYTES:
@@ -53,6 +69,8 @@ def validate_user_schema(schema: dict[str, Any] | None) -> None:
     if schema.get("type") != "object":
         raise ValueError("JSON Schema root type must be object")
 
+    # Iterative worklist walk (not recursion) so a deeply nested user schema
+    # cannot blow the stack; traversal order does not matter here.
     pending: list[Any] = [schema]
     while pending:
         node = pending.pop()
@@ -151,6 +169,9 @@ def extraction_schema(data_schema: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# RFC 6901 JSON Pointer escaping: '~' and '/' are the two characters that are
+# structurally significant in a pointer, so they must be escaped in that
+# order (escaping '/' first would corrupt an already-escaped '~1').
 def _escape_pointer(value: str) -> str:
     return value.replace("~", "~0").replace("/", "~1")
 
@@ -193,7 +214,14 @@ def validate_extraction(
     *,
     generic_schema: bool = False,
 ) -> tuple[list[str], list[dict[str, Any]]]:
-    """Validate the complete result and return errors plus trusted evidence only."""
+    """Validate the complete result and return errors plus trusted evidence only.
+
+    "Trusted" evidence is the subset that passes every check below: it cites
+    known line IDs, its quote is actually contained in the text of those
+    lines, and it points at a real non-null leaf in "data". Untrusted
+    evidence is dropped, not kept with a warning - see extract_document,
+    which only ever stores this function's second return value.
+    """
     errors = [
         error.message
         for error in Draft202012Validator(extraction_schema(data_schema)).iter_errors(result)
@@ -201,6 +229,9 @@ def validate_extraction(
     data = result.get("data")
     required_paths = _leaf_pointers(data)
     if generic_schema:
+        # document_type/fields[].name/value_type are schema metadata the model
+        # chose to shape its own answer, not extracted facts, so they are
+        # exempt from needing a citation (see _generic_metadata_path).
         required_paths = {path for path in required_paths if not _generic_metadata_path(path)}
 
     known = {line.id: line for line in catalog}
@@ -211,6 +242,8 @@ def validate_extraction(
         path = str(evidence.get("path", ""))
         try:
             _resolve_pointer(result, path)
+        # PEP 758 (Python 3.14+): comma-separated exception types without
+        # parentheses, equivalent to except (KeyError, IndexError, ...).
         except KeyError, IndexError, TypeError, ValueError:
             errors.append(f"{prefix} has unknown data pointer {path!r}")
             continue
@@ -251,6 +284,13 @@ def _catalog_text(lines: Iterable[LineEvidence]) -> str:
 
 
 def _chunks(parsed: ParsedDocument) -> list[ExtractionChunk]:
+    """Bin-pack pages into chunks under MAX_CHUNK_PAGES/MAX_CHUNK_CHARS.
+
+    Oversized pages are split further; a page split with no line evidence at
+    all (see the `not lines` branch below) produces chunks with an empty
+    catalog, which validate_extraction can never satisfy - any value
+    extracted from such a chunk is upgraded to an issue, not silently kept.
+    """
     by_id = {line.id: line for line in parsed.lines}
     chunks: list[ExtractionChunk] = []
     page_group: list[Any] = []
@@ -454,6 +494,9 @@ def extract_document(parsed: ParsedDocument, options: ProcessingOptions) -> Extr
     if not results:
         return ExtractionResult("failed", None, (), tuple(issues), tuple(sorted(hashes)))
 
+    # Tree reduction: merge groups of up to MERGE_FAN_IN partials per model
+    # call, then repeat on the merged results, until one remains. Keeps any
+    # single merge call's input bounded regardless of total chunk count.
     while len(results) > 1:
         merged: list[dict[str, Any]] = []
         for offset in range(0, len(results), MERGE_FAN_IN):
@@ -491,6 +534,8 @@ def extract_document(parsed: ParsedDocument, options: ProcessingOptions) -> Extr
 
     final = results[0]
     issues.extend(_issues(final.get("issues", []), "extraction"))
+    # ProcessingIssue is a frozen, hashable dataclass; dict.fromkeys() dedupes
+    # while preserving first-seen order (a plain set would not).
     issues = list(dict.fromkeys(issues))
     status = str(final.get("status", "failed"))
     if issues and status == "complete":

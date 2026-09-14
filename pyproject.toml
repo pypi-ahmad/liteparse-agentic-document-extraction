@@ -7,16 +7,19 @@ requires-python = ">=3.14.7"
 dependencies = [
     "jsonschema>=4,<5",
     "liteparse>=2.14,<3",
+    "markdown-it-py>=4,<5",
     "openai>=3.7,<4",
     "pillow>=12,<13",
     "pydantic>=2,<3",
     "python-multipart>=0.0.20,<1",
     "starlette>=0.47,<1",
-    "streamlit>=1.62,<2",
+    "streamlit[pdf]>=1.62,<2",
+    "uvicorn>=0.52,<1",
 ]
 
 [project.scripts]
 liteparse-ade = "liteparse_agentic_document_extraction:main"
+liteparse-ade-eval = "liteparse_agentic_document_extraction.evaluation:main"
 
 [build-system]
 requires = ["uv_build>=0.12.7,<0.13.0"]
@@ -37,6 +40,7 @@ testpaths = ["tests"]
 
 [tool.coverage.run]
 concurrency = ["thread"]
+omit = ["*/ui.py"]
 
 [tool.ruff]
 line-length = 100

@@ -1,4 +1,8 @@
-"""Pure helpers used by the Streamlit interface."""
+"""Pure helpers used by the Streamlit interface.
+
+Split out from ui.py so this logic can be unit tested directly without
+Streamlit's AppTest harness.
+"""
 
 from __future__ import annotations
 
@@ -21,6 +25,8 @@ def read_schema(mode: str, pasted: str, uploaded: Any) -> dict[str, Any] | None:
     """Read and size-check the selected optional JSON Schema."""
     if mode == "None":
         return None
+    # "Paste" mode always uses the text area; any other mode (Upload) reads
+    # the uploaded file if present, else empty bytes to hit the check below.
     raw = pasted.encode() if mode == "Paste" else uploaded.getvalue() if uploaded else b""
     if not raw.strip():
         raise ValueError("Selected schema mode requires JSON Schema content")

@@ -1,4 +1,9 @@
-"""Packaged Streamlit UI and private LiteParse OCR route."""
+"""Packaged Streamlit UI and private LiteParse OCR route.
+
+Mounts ocr_endpoint on the same ASGI app as the Streamlit UI so the loopback
+OCR callback (see settings.OCR_URL) is served from the single process this
+app already runs as. Next: ui.py, the Streamlit script this app runs.
+"""
 
 from pathlib import Path
 

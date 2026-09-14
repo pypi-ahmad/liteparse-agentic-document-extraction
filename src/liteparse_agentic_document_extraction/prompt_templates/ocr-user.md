@@ -1,9 +1,10 @@
-# OCR page
+# OCR image
 
-Image dimensions: {{WIDTH}} by {{HEIGHT}} pixels.
-Language hint: {{LANGUAGE}}.
+<image_context>
+width_pixels: {{WIDTH}}
+height_pixels: {{HEIGHT}}
+language_hint: {{LANGUAGE}}
+</image_context>
 
-For each visible line, return exact text, `[x1, y1, x2, y2]` pixel bounds, confidence
-from 0 to 1, and a polygon only when rotation makes it useful. Return `hard_regions`
-for clipped or tiny text, handwriting, dense tables, overlapping marks, blur, or
-uncertain reading order. Keep regions tight. Return empty arrays when appropriate.
+Apply the OCR fidelity contract to the attached image. The language hint is advisory;
+preserve visible text in every language.

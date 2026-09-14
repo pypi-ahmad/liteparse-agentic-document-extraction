@@ -1,4 +1,10 @@
-"""Small public coordinator for validation, parsing, extraction, and export."""
+"""Small public coordinator for validation, parsing, extraction, and export.
+
+This is the module ui.py calls; it owns the per-document error boundary
+(process_document) and the exact JSON shape written to disk/download. Next:
+repair.py for parsing/repair and extraction.py for the optional structured
+extraction this module calls into.
+"""
 
 from __future__ import annotations
 
@@ -53,7 +59,12 @@ def safe_stem(filename: str) -> str:
 
 
 def validate_upload(filename: str, data: bytes) -> str:
-    """Validate extension, size, signature, and decoded image dimensions."""
+    """Validate extension, size, signature, and decoded image dimensions.
+
+    First check on fully untrusted upload bytes: extension and magic-byte
+    signature must agree, and images must survive Pillow's verify() before
+    anything here is handed to LiteParse or an OpenAI call.
+    """
     suffix = Path(filename).suffix.lower()
     if suffix not in ALLOWED_EXTENSIONS:
         raise ValueError(f"Unsupported file type: {suffix or 'none'}")
@@ -95,6 +106,9 @@ def parse_target_pages(value: str | None) -> list[int] | None:
             pages.add(int(part))
         else:
             raise ValueError("Page range must use numbers such as 1-5,8")
+        # Re-check after every part: a single range can be within budget on
+        # its own but still push the accumulated set over MAX_PAGES once
+        # combined with earlier parts.
         if len(pages) > MAX_PAGES:
             raise ValueError("Page selection exceeds 100 pages")
     return sorted(pages)
@@ -111,9 +125,16 @@ def _issue_dict(issue: ProcessingIssue) -> dict[str, Any]:
 def _overall_status(
     markdown: str, extraction_status: str, issues: list[ProcessingIssue]
 ) -> RunStatus:
+    """Derive the single user-facing status from independent stage outcomes.
+
+    Precedence: no usable Markdown always means FAILED, regardless of
+    extraction; otherwise any issue (repair, extraction, or annotation) or an
+    extraction status other than complete/skipped downgrades to PARTIAL; only
+    a clean run with extraction complete or turned off is COMPLETE.
+    """
     if not markdown.strip():
         return RunStatus.FAILED
-    if extraction_status != "complete" or issues:
+    if extraction_status not in {"complete", "skipped"} or issues:
         return RunStatus.PARTIAL
     return RunStatus.COMPLETE
 
@@ -124,7 +145,8 @@ def process_document(filename: str, data: bytes, options: ProcessingOptions) -> 
     try:
         suffix = validate_upload(filename, data)
         selected = parse_target_pages(options.target_pages)
-        validate_user_schema(options.schema)
+        if options.extract_data:
+            validate_user_schema(options.schema)
     except ValueError as exc:
         artifact.error = str(exc)
         return artifact
@@ -135,22 +157,24 @@ def process_document(filename: str, data: bytes, options: ProcessingOptions) -> 
             source.write_bytes(data)
             parsed = parse_document(source, options, selected)
             artifact.markdown = parsed.markdown
+            artifact.annotated_pdf = parsed.annotated_pdf
             extraction_issues: list[ProcessingIssue] = []
-            try:
-                extracted = extract_document(parsed, options)
-            except Exception:
-                LOGGER.exception("Document extraction failed")
-                extracted = None
-                extraction_issues.append(
-                    ProcessingIssue(
-                        "extraction_failed",
-                        "Terra extraction failed; Markdown remains available",
-                        "extraction",
+            extracted = None
+            extraction_status = "skipped" if not options.extract_data else "failed"
+            if options.extract_data and artifact.markdown:
+                try:
+                    extracted = extract_document(parsed, options)
+                except Exception:
+                    LOGGER.exception("Document extraction failed")
+                    extraction_issues.append(
+                        ProcessingIssue(
+                            "extraction_failed",
+                            "Terra extraction failed; Markdown remains available",
+                            "extraction",
+                        )
                     )
-                )
 
             issues = [*parsed.issues, *extraction_issues]
-            extraction_status = "failed"
             data_output = None
             evidence_output: list[dict[str, Any]] = []
             extraction_hashes: tuple[str, ...] = ()
@@ -178,13 +202,20 @@ def process_document(filename: str, data: bytes, options: ProcessingOptions) -> 
 
             artifact.status = _overall_status(artifact.markdown, extraction_status, issues)
             artifact.output = {
-                "schema_version": "2.0",
+                "schema_version": "2.2",
                 "status": artifact.status.value,
                 "stages": {
                     "parsing": "complete" if artifact.markdown else "failed",
                     "repair": "partial"
                     if any(issue.stage == "repair" for issue in issues)
                     else "complete",
+                    "annotation": (
+                        "complete"
+                        if artifact.annotated_pdf
+                        else "failed"
+                        if options.generate_annotated_pdf
+                        else "skipped"
+                    ),
                     "extraction": extraction_status,
                 },
                 "document": {
@@ -198,6 +229,8 @@ def process_document(filename: str, data: bytes, options: ProcessingOptions) -> 
                     "liteparse_version": version("liteparse"),
                     "base_dpi": BASE_DPI,
                     "repair_dpi": REPAIR_DPI,
+                    "accuracy_policy": options.accuracy_policy.value,
+                    "experimental_peer_evidence": options.experimental_peer_evidence,
                     "prompt_template_hashes": {
                         "ocr": list(parsed.prompt_template_hashes),
                         "extraction": list(extraction_hashes),
@@ -219,6 +252,10 @@ def process_document(filename: str, data: bytes, options: ProcessingOptions) -> 
                 artifact.error = "Document parsing produced no usable Markdown"
     except Exception as exc:
         LOGGER.exception("Document parsing failed")
+        # Only ValueError text reaches the user: every ValueError raised in
+        # this pipeline is a deliberate, locally written validation message.
+        # Any other exception type might carry library internals or paths,
+        # so it is replaced with a fixed, safe string.
         artifact.error = str(exc) if isinstance(exc, ValueError) else "Document parsing failed"
     return artifact
 
@@ -241,6 +278,8 @@ def result_zip(artifacts: Iterable[DocumentArtifact]) -> bytes:
             stem = base if counts[base] == 1 else f"{base}-{counts[base]}"
             archive.writestr(f"{stem}.md", artifact.markdown)
             archive.writestr(f"{stem}.json", artifact_json(artifact))
+            if artifact.annotated_pdf:
+                archive.writestr(f"{stem}.annotated.pdf", artifact.annotated_pdf)
     return output.getvalue()
 
 

@@ -1,20 +1,36 @@
-"""Typed application records and model response schemas."""
+"""Typed application records and model response schemas.
+
+Pydantic models (OcrLine, HardRegion, OcrOutput) validate untrusted model
+output at the Terra API boundary; the frozen dataclasses below them are
+internal, already-trusted pipeline state. Next: ocr_bridge.py, which produces
+the pydantic models, and repair.py, which produces the dataclasses.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .settings import BASE_DPI, MODEL_ID, REASONING_EFFORT, REPAIR_DPI
 
+# (x1, y1, x2, y2), origin top-left. The unit varies by producer: OCR-stage
+# boxes are pixels in the rendered screenshot, LineEvidence/RepairReceipt
+# boxes are page-viewport points (72 DPI, see pipeline.py's
+# "viewport_points_top_left_72dpi" tag on serialized output). Callers must
+# not mix the two without an explicit DPI/scale conversion.
 BBox = tuple[float, float, float, float]
 
 
 def _validate_box(value: list[float]) -> list[float]:
+    """Reject degenerate or negative geometry; only used by the pydantic models below.
+
+    Plain BBox tuples on dataclasses (LineEvidence, RepairReceipt, ...) are not
+    run through this check and are trusted to already be well-formed.
+    """
     x1, y1, x2, y2 = value
     if x1 < 0 or y1 < 0 or x2 <= x1 or y2 <= y1:
         raise ValueError("bbox must be an ordered positive rectangle")
@@ -37,6 +53,13 @@ class OcrStage(StrEnum):
     FINAL = "final"
 
 
+class AccuracyPolicy(StrEnum):
+    """Available OCR repair verification policies."""
+
+    LEGACY = "legacy"
+    ACCURACY = "accuracy"
+
+
 class OcrLine(BaseModel):
     """One line returned through LiteParse's HTTP OCR contract."""
 
@@ -45,6 +68,7 @@ class OcrLine(BaseModel):
     bbox: list[float] = Field(min_length=4, max_length=4)
     confidence: float = Field(ge=0.0, le=1.0)
     polygon: list[list[float]] | None = None
+    source_kind: Literal["printed", "handwritten", "uncertain"] = "uncertain"
     _ordered_bbox = field_validator("bbox")(_validate_box)
 
 
@@ -69,12 +93,16 @@ class OcrOutput(BaseModel):
 class ProcessingOptions:
     """User-selected processing options."""
 
-    instructions: str
+    instructions: str = ""
     schema: dict[str, Any] | None = None
     language: str = "auto"
     target_pages: str | None = None
     keep_headers_footers: bool = False
     image_mode: str = "placeholder"
+    extract_data: bool = False
+    generate_annotated_pdf: bool = False
+    accuracy_policy: AccuracyPolicy = AccuracyPolicy.ACCURACY
+    experimental_peer_evidence: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +139,10 @@ class RepairReceipt:
     reason: str
     replaced_lines: int
     added_lines: int
+    # Mirrors consensus.OcrConsensus.status ("consensus"/"majority"); stays at
+    # the "legacy" default when AccuracyPolicy.LEGACY skips repeated reads.
+    verification: str = "legacy"
+    ocr_calls: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +152,8 @@ class ParsedPage:
     page: int
     markdown: str
     line_ids: tuple[str, ...]
+    width: float = 0.0
+    height: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +168,7 @@ class ParsedDocument:
     source_page_count: int
     processed_pages: tuple[int, ...]
     prompt_template_hashes: tuple[str, ...]
+    annotated_pdf: bytes = b""
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,7 +184,12 @@ class ExtractionResult:
 
 @dataclass(slots=True)
 class DocumentArtifact:
-    """In-memory result for one uploaded document instance."""
+    """In-memory result for one uploaded document instance.
+
+    source_bytes lives only for the lifetime of the Streamlit session; it is
+    never written to storage.py's history database (see the privacy notes in
+    the project README).
+    """
 
     source_name: str
     source_bytes: bytes
@@ -159,6 +199,7 @@ class DocumentArtifact:
     markdown: str = ""
     output: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
+    annotated_pdf: bytes = b""
 
 
 __all__ = [
@@ -166,6 +207,7 @@ __all__ = [
     "MODEL_ID",
     "REASONING_EFFORT",
     "REPAIR_DPI",
+    "AccuracyPolicy",
     "BBox",
     "DocumentArtifact",
     "ExtractionResult",

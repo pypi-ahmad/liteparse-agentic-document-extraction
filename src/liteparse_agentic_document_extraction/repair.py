@@ -1,4 +1,13 @@
-"""Deep LiteParse module for base parsing and transactional 400-DPI repair."""
+"""Deep LiteParse module for base parsing and transactional 400-DPI repair.
+
+"Transactional" means apply_repair only ever mutates a page's OCR results
+together with a successful, non-empty replacement; a failed or empty repair
+leaves the 300-DPI base reading untouched (see apply_repair and the
+`if not added: raise` check in parse_document below). Repair failures are
+recorded as ProcessingIssue entries, not raised past this module, so one bad
+region never fails a whole document. Next: pipeline.py's process_document,
+the only caller of parse_document.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +19,8 @@ from typing import Any
 
 from liteparse import LiteParse
 
+from .annotations import build_annotated_pdf
+from .consensus import has_ocr_anomaly
 from .models import (
     BBox,
     LineEvidence,
@@ -22,8 +33,10 @@ from .models import (
     RepairReceipt,
 )
 from .ocr_bridge import REGISTRY, OcrPageRecord, image_digest
+from .peer_evidence import records_by_page, select_peer_evidence
 from .settings import (
     BASE_DPI,
+    LOW_CONFIDENCE_THRESHOLD,
     MAX_PAGES,
     MAX_REPAIRS_PER_DOCUMENT,
     MAX_REPAIRS_PER_PAGE,
@@ -53,7 +66,12 @@ def _boxes_touch(first: BBox, second: BBox, gap: float) -> bool:
 
 
 def merge_regions(regions: Iterable[Region], width: int, height: int) -> list[Region]:
-    """Merge overlapping or nearby hard regions without hiding budget overflow."""
+    """Merge overlapping or nearby hard regions without hiding budget overflow.
+
+    Regions within 1% of the page's larger dimension are joined into one so
+    that one visually contiguous problem area costs one repair-budget slot
+    (see MAX_REPAIRS_PER_PAGE) instead of several adjacent ones.
+    """
     merged: list[Region] = []
     gap = max(width, height) * 0.01
     for region in regions:
@@ -77,7 +95,13 @@ def merge_regions(regions: Iterable[Region], width: int, height: int) -> list[Re
 
 
 def padded_crop(bbox: BBox, width: int, height: int) -> BBox:
-    """Convert a pixel bbox to LiteParse fractional crop values with 2% padding."""
+    """Convert a pixel bbox to LiteParse fractional crop values with 2% padding.
+
+    Return order is (top, right, bottom, left) - LiteParse's crop_box
+    convention - not the (x1, y1, x2, y2) order used by every other BBox in
+    this file. right/bottom are fractions cropped *away* from that edge, not
+    absolute positions, hence the `1.0 - ...`.
+    """
     x1, y1, x2, y2 = bbox
     pad_x, pad_y = width * 0.02, height * 0.02
     left = max(0.0, x1 - pad_x) / width
@@ -88,11 +112,16 @@ def padded_crop(bbox: BBox, width: int, height: int) -> BBox:
 
 
 def _parser(
-    options: ProcessingOptions, run_id: str, stage: OcrStage, **overrides: Any
+    options: ProcessingOptions,
+    run_id: str,
+    stage: OcrStage,
+    *,
+    ocr_url: str = OCR_URL,
+    **overrides: Any,
 ) -> LiteParse:
     settings: dict[str, Any] = {
         "ocr_enabled": True,
-        "ocr_server_url": OCR_URL,
+        "ocr_server_url": ocr_url,
         "ocr_server_headers": {"X-Run-ID": run_id, "X-OCR-Stage": stage.value},
         "ocr_language": options.language,
         "max_pages": MAX_PAGES,
@@ -104,16 +133,23 @@ def _parser(
         "extract_screenshots": True,
         "extract_blocks": True,
         "include_complexity": True,
+        # A single page's own parse error is tolerated (continue_on_page_error)
+        # and surfaces later as a ProcessingIssue; an OCR-callback failure is
+        # not - it aborts the whole LiteParse.parse() call below, which every
+        # caller in this module wraps in a try/except to convert to an issue.
         "continue_on_page_error": True,
         "ocr_failure_fatal": True,
         "num_workers": 1,
         "quiet": True,
     }
+    settings["ocr_server_headers"]["X-Accuracy-Policy"] = options.accuracy_policy.value
     settings.update(overrides)
     return LiteParse(**settings)
 
 
-def _page_regions(result: Any, run_id: str) -> list[tuple[Region, str]]:
+def _page_regions(
+    result: Any, run_id: str, options: ProcessingOptions | None = None
+) -> list[tuple[Region, str]]:
     candidates: list[tuple[Region, str]] = []
     pages = {page.page_num: page for page in result.pages}
     for screenshot in result.screenshots:
@@ -130,6 +166,29 @@ def _page_regions(result: Any, run_id: str) -> list[tuple[Region, str]]:
             )
             for region in record.hard_regions
         ]
+        # Legacy policy only repairs regions Terra explicitly flagged as hard;
+        # accuracy policy (the default, and callers with no options at all)
+        # additionally treats a low-confidence or anomalous line as its own
+        # repair candidate.
+        if options is None or options.accuracy_policy.value == "accuracy":
+            for line in record.results:
+                reasons = []
+                if line.confidence < LOW_CONFIDENCE_THRESHOLD:
+                    reasons.append(f"OCR confidence below {LOW_CONFIDENCE_THRESHOLD:.2f}")
+                if has_ocr_anomaly(line.text):
+                    reasons.append("OCR anomaly")
+                if reasons:
+                    regions.append(
+                        Region(
+                            screenshot.page_num,
+                            (line.bbox[0], line.bbox[1], line.bbox[2], line.bbox[3]),
+                            "; ".join(reasons),
+                        )
+                    )
+        # A LiteParse "grid_fallback" block means layout detection could not
+        # confidently reconstruct a table/grid in that region; always repair
+        # it regardless of OCR confidence, since the risk here is structural,
+        # not textual.
         for block in page.blocks or []:
             if block.kind == "grid_fallback" and block.bbox is not None:
                 box = block.bbox
@@ -172,7 +231,14 @@ def apply_repair(
     crop_box: BBox,
     repair: OcrPageRecord,
 ) -> tuple[int, int]:
-    """Atomically replace base lines only when valid 400-DPI lines map back."""
+    """Atomically replace base lines only when valid 400-DPI lines map back.
+
+    crop_box is (top, right, bottom, left) fractions of the base image (see
+    padded_crop); left/top here recover that crop's absolute pixel origin in
+    base-image space, and scale_x/scale_y convert repair-image pixels back
+    to that same base-image pixel space so mapped boxes are directly
+    comparable to base.results.
+    """
     left = crop_box[3] * base.width
     top = crop_box[0] * base.height
     scale_x = (1.0 - crop_box[1] - crop_box[3]) * base.width / repair.width
@@ -186,6 +252,9 @@ def apply_repair(
             left + x2 * scale_x,
             top + y2 * scale_y,
         )
+        # Center-point containment, not IoU: cheap, and sufficient because
+        # padded_crop already pads the region by 2%, so a line that truly
+        # belongs to this repair rarely straddles the boundary.
         if not _inside(box, inner_box):
             continue
         polygon = None
@@ -195,11 +264,17 @@ def apply_repair(
             ]
         mapped.append(line.model_copy(update={"bbox": list(box), "polygon": polygon}))
 
+    # Nothing to replace with: leave base.results completely untouched rather
+    # than deleting the old lines and ending up with a hole (the
+    # "transactional" guarantee described in the module docstring).
     if not mapped:
         return 0, 0
     preserved = [line for line in base.results if not _inside(line.bbox, inner_box)]
     removed = len(base.results) - len(preserved)
     base.results = sorted(preserved + mapped, key=lambda line: (line.bbox[1], line.bbox[0]))
+    # OcrLine has no stable identity of its own; record (text, rounded bbox)
+    # tuples so _line_catalog can later recognize which lines came from a
+    # repair after they have been copied (model_copy) into base.results.
     base.repaired_fingerprints.update(_fingerprint(line) for line in mapped)
     return removed, len(mapped)
 
@@ -269,21 +344,27 @@ def _line_catalog(result: Any, run_id: str) -> tuple[LineEvidence, ...]:
 
 
 def parse_document(
-    source: Path, options: ProcessingOptions, selected: list[int] | None
+    source: Path,
+    options: ProcessingOptions,
+    selected: list[int] | None,
+    *,
+    ocr_url: str = OCR_URL,
 ) -> ParsedDocument:
     """Parse one document and apply bounded hard-region repair behind one interface."""
     run_id = REGISTRY.start()
     issues: list[ProcessingIssue] = []
     receipts: list[RepairReceipt] = []
     try:
+        # Cheap one-page, no-OCR probe purely to learn total_pages before
+        # committing to (and billing for) the real OCR-enabled parse below.
         preflight = LiteParse(ocr_enabled=False, max_pages=1, quiet=True).parse(source)
         if selected and max(selected) > preflight.total_pages:
             raise ValueError("Page selection exceeds document page count")
         if not selected and preflight.total_pages > MAX_PAGES:
             raise ValueError("Document exceeds 100 pages; select at most 100 pages")
 
-        base_result = _parser(options, run_id, OcrStage.BASE).parse(source)
-        candidates = _page_regions(base_result, run_id)
+        base_result = _parser(options, run_id, OcrStage.BASE, ocr_url=ocr_url).parse(source)
+        candidates = _page_regions(base_result, run_id, options)
         per_page: dict[int, int] = {}
         bounded_candidates: list[tuple[Region, str]] = []
         per_page_skipped = 0
@@ -317,19 +398,26 @@ def parse_document(
 
         shots = {shot.page_num: shot for shot in base_result.screenshots}
         pages = {page.page_num: page for page in base_result.pages}
+        base_records = records_by_page(base_result, run_id, REGISTRY)
         for number, (region, digest) in enumerate(candidates, start=1):
             shot = shots[region.page]
             crop = padded_crop(region.bbox, shot.width, shot.height)
             region_id = f"p{region.page}-r{number:03d}"
             try:
+                if options.experimental_peer_evidence:
+                    peer = select_peer_evidence(base_result, base_records, region.page, region.bbox)
+                    if peer is not None:
+                        REGISTRY.set_peer(run_id, region_id, peer.image_bytes)
                 repair_parser = _parser(
                     options,
                     run_id,
                     OcrStage.REPAIR,
+                    ocr_url=ocr_url,
                     ocr_server_headers={
                         "X-Run-ID": run_id,
                         "X-OCR-Stage": OcrStage.REPAIR.value,
                         "X-Region-ID": region_id,
+                        "X-Accuracy-Policy": options.accuracy_policy.value,
                     },
                     dpi=REPAIR_DPI,
                     target_pages=str(region.page),
@@ -342,6 +430,8 @@ def parse_document(
                 base = REGISTRY.base_record(run_id, digest)
                 if repair is None or base is None:
                     raise RuntimeError("repair OCR returned no usable record")
+                if repair.verification == "disagreement":
+                    raise RuntimeError("repair OCR reads disagreed")
                 removed, added = apply_repair(base, region.bbox, crop, repair)
                 if not added:
                     raise RuntimeError("repair OCR returned no valid mapped lines")
@@ -353,14 +443,32 @@ def parse_document(
                     region.bbox[3] / shot.height * page.height,
                 )
                 receipts.append(
-                    RepairReceipt(region.page, region_id, point_box, region.reason, removed, added)
+                    RepairReceipt(
+                        region.page,
+                        region_id,
+                        point_box,
+                        region.reason,
+                        removed,
+                        added,
+                        repair.verification,
+                        repair.ocr_calls,
+                    )
                 )
-            except Exception:
+            except Exception as error:
                 LOGGER.exception("Hard-region repair failed for page %s", region.page)
+                # Fragile by construction: this matches the literal wording of
+                # the "repair OCR reads disagreed" RuntimeError raised above.
+                # Changing that message without updating this check would
+                # silently reclassify disagreements as generic repair_failed.
+                disagreement = "disagreed" in str(error)
                 issues.append(
                     ProcessingIssue(
-                        "repair_failed",
-                        "400-DPI repair failed; retained the 300-DPI region",
+                        "repair_disagreement" if disagreement else "repair_failed",
+                        (
+                            "Independent 400-DPI OCR reads disagreed; retained the 300-DPI region"
+                            if disagreement
+                            else "400-DPI repair failed; retained the 300-DPI region"
+                        ),
                         "repair",
                         page=region.page,
                     )
@@ -369,7 +477,9 @@ def parse_document(
         final_result = base_result
         if receipts:
             try:
-                final_result = _parser(options, run_id, OcrStage.FINAL).parse(source)
+                final_result = _parser(options, run_id, OcrStage.FINAL, ocr_url=ocr_url).parse(
+                    source
+                )
             except Exception:
                 LOGGER.exception("Final repaired parse failed; using base parse")
                 issues.append(
@@ -390,6 +500,8 @@ def parse_document(
                 page.page_num,
                 page.markdown or page.text,
                 tuple(line_ids_by_page.get(page.page_num, [])),
+                page.width,
+                page.height,
             )
             for page in final_result.pages
         )
@@ -408,6 +520,21 @@ def parse_document(
             if (record := REGISTRY.base_record(run_id, image_digest(screenshot.image_bytes)[0]))
             for prompt_hash in record.prompt_hashes
         }
+        annotated_pdf = b""
+        if options.generate_annotated_pdf:
+            try:
+                annotated_pdf = build_annotated_pdf(
+                    final_result.screenshots, final_result.pages, lines
+                )
+            except Exception:
+                LOGGER.exception("Annotated PDF generation failed")
+                issues.append(
+                    ProcessingIssue(
+                        "annotation_failed",
+                        "Annotated PDF generation failed; Markdown remains available",
+                        "annotation",
+                    )
+                )
         return ParsedDocument(
             markdown=final_result.text,
             pages=parsed_pages,
@@ -417,6 +544,9 @@ def parse_document(
             source_page_count=preflight.total_pages,
             processed_pages=tuple(page.page_num for page in final_result.pages),
             prompt_template_hashes=tuple(sorted(prompt_hashes)),
+            annotated_pdf=annotated_pdf,
         )
     finally:
+        # Guarantee the run-scoped OCR cache is dropped on every exit path,
+        # including validation failures and repair exceptions above.
         REGISTRY.finish(run_id)

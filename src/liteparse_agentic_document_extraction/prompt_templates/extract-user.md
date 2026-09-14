@@ -1,27 +1,26 @@
 # Extraction request
 
-## User objective
+Populate the data schema under the evidence-grounded extraction contract. If the user
+objective is empty, extract all salient fields supported by the schema and document.
 
+<user_objective>
 {{INSTRUCTIONS}}
+</user_objective>
 
-If the objective is empty, extract all salient document fields.
-
-## Data schema
-
+<data_schema>
 {{SCHEMA_DESCRIPTION}}
+</data_schema>
 
-## Document Markdown
-
-<document>
+<document_markdown>
 {{DOCUMENT}}
-</document>
+</document_markdown>
 
-## Trusted line catalog
-
-<line_catalog>
+<trusted_line_catalog>
 {{LINE_CATALOG}}
-</line_catalog>
+</trusted_line_catalog>
 
-## Validation feedback
+## Correction feedback
 
+<validation_feedback>
 {{VALIDATION_ERRORS}}
+</validation_feedback>
