@@ -1,4 +1,7 @@
 .venv/
+data/
+evaluation/runs/
+.aiwg/
 __pycache__/
 .pytest_cache/
 .ruff_cache/
